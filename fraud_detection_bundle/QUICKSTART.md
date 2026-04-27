@@ -71,6 +71,57 @@ deterministic offline mode.
 | `opencv-python-headless` skipped | Video analysis disabled; everything else still works. |
 | Browser doesn't auto-open | Open `http://127.0.0.1:8000` manually. |
 
+## Run as a desktop application
+
+Wraps the same UI in a native OS window using your system's webview
+(Edge WebView2 on Windows, WebKit on macOS, WebKitGTK on Linux). No
+browser tab, no port to type — looks and feels like a desktop app.
+
+```bash
+./run_desktop.sh        # macOS / Linux / WSL
+./run_desktop.ps1       # Windows PowerShell
+```
+
+The launcher:
+
+1. Creates `.venv/` if missing.
+2. Installs everything `run_local.sh` does PLUS `pywebview`.
+3. Starts uvicorn on a random free loopback port.
+4. Opens a 1280 × 820 native window pointing at it.
+5. Shuts uvicorn down cleanly when you close the window.
+
+### Build a redistributable binary (PyInstaller)
+
+```bash
+source .venv/bin/activate
+pip install pyinstaller
+pyinstaller desktop_app.spec
+# → dist/MythosBankFraudDetection (Linux/macOS) or .exe (Windows)
+```
+
+The spec excludes the heaviest optional analyzers (opencv, skimage,
+pypdfium2) to keep the binary lean. Re-enable them by moving the entry
+from `excludes=` to `hiddenimports=` in `desktop_app.spec`.
+
+### Linux note
+
+pywebview needs **WebKitGTK** at runtime. If the desktop app fails to
+launch with a `gi.repository.Gtk` import error:
+
+```bash
+# Debian / Ubuntu
+sudo apt install python3-gi gir1.2-webkit2-4.0
+# Fedora
+sudo dnf install python3-gobject webkit2gtk3
+# Arch
+sudo pacman -S python-gobject webkit2gtk
+```
+
+### Windows note
+
+Edge WebView2 ships with Edge on Windows 10 1803+ and Windows 11. If
+the window won't open, install the runtime from <https://aka.ms/webview2>.
+
 ## Skipping the launcher (manual setup)
 
 ```bash

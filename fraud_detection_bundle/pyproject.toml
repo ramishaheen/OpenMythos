@@ -31,17 +31,22 @@ ssim = ["scikit-image>=0.22.0"]
 pdf = ["pypdfium2>=4.20.0"]
 ocr = ["pytesseract>=0.3.10"]
 deepseek = ["openai>=1.40.0"]
+desktop = ["pywebview>=5.0", "fastapi>=0.110", "uvicorn[standard]>=0.29"]
 all = [
     "opencv-python>=4.8.0",
     "scikit-image>=0.22.0",
     "pypdfium2>=4.20.0",
     "pytesseract>=0.3.10",
     "openai>=1.40.0",
+    "pywebview>=5.0",
 ]
 dev = ["pytest>=8.0.0"]
 
 [project.scripts]
 fraud-detect = "fraud_detection.cli:main"
+# Note: desktop mode is `python desktop_app.py` (or run_desktop.sh / .ps1) —
+# the script lives at the bundle root, alongside the web/ folder, because
+# it imports both fraud_detection AND web.app.
 
 [tool.setuptools]
 packages = ["fraud_detection", "fraud_detection.detectors", "fraud_detection.calibration"]

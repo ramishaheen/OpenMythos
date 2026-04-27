@@ -1,0 +1,19 @@
+# Bundle-local overrides on top of the parent repo's .gitignore.
+
+# The parent repo ignores *.spec (a general rule), but the desktop
+# PyInstaller spec is a tracked, hand-curated build artifact.
+!desktop_app.spec
+
+# Don't commit a venv created by run_local.sh / run_desktop.sh.
+.venv/
+
+# PyInstaller / packaging output.
+build/
+dist/
+
+# Optional config you don't want to push (per-deployment).
+.env
+.env.*
+
+# Reports persisted by FRAUD_REPORT_DIR if pointed at the bundle.
+fraud_reports/

@@ -132,11 +132,16 @@ No local install, no tunnel setup, no laptop networking issues.
 the browser):
 
 ```bash
-./run_local.sh        # macOS / Linux / WSL
+./run_local.sh        # macOS / Linux / WSL  → opens browser tab
 ./run_local.ps1       # Windows PowerShell
+
+./run_desktop.sh      # OR: same thing, but as a NATIVE DESKTOP WINDOW
+./run_desktop.ps1     #     (uses the OS's system webview — no browser
+                      #      tab; behaves like a normal desktop app).
 ```
 
-See [QUICKSTART.md](QUICKSTART.md) for the full local recipe.
+See [QUICKSTART.md](QUICKSTART.md) for the full local recipe (desktop
+build instructions, Linux WebKitGTK note, PyInstaller spec).
 
 **Manual:**
 
