@@ -87,10 +87,10 @@ def risk_label(score: float) -> str:
     deliberately conservative on the synthetic baseline; production
     deployments should re-calibrate against labelled data.
     """
-    if score >= 0.32:
+    if score >= 0.4434:
         return "high"
-    if score >= 0.22:
+    if score >= 0.2412:
         return "medium"
-    if score >= 0.17:
+    if score >= 0.1912:
         return "low"
     return "minimal"

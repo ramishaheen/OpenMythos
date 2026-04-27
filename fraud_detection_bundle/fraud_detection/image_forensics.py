@@ -39,18 +39,19 @@ from fraud_detection.utils import clamp01, risk_label
 # labelled data for production deployments and persist the resulting JSON
 # alongside the report (chain-of-custody requirement).
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "ela": 0.4834,
+    "ela": 0.2839,
     "jpeg_qtable": 0.0960,
     "benford_dct": 0.0600,
-    "cfa_inconsistency": 0.1326,
+    "cfa_inconsistency": 0.1195,
     "copy_move_phash": 0.0960,
-    "prnu_consistency": 0.1020,
+    "prnu_consistency": 0.3146,
     "lighting_consistency": 0.0300,
 }
 
-# Empirical risk thresholds learned on the synthetic split. Conservative.
-# A real deployment should re-run calibration and update these.
-DEFAULT_THRESHOLDS = {"high": 0.32, "medium": 0.22, "low": 0.17}
+# Empirical risk thresholds learned on the synthetic split (overall fused
+# AUC = 0.999). A real deployment should re-run calibration against
+# labelled domain data and update these thresholds.
+DEFAULT_THRESHOLDS = {"high": 0.4434, "medium": 0.2412, "low": 0.1912}
 
 
 @dataclass

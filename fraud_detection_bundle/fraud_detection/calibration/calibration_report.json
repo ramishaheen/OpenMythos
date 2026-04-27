@@ -15,35 +15,35 @@
     "benford_dct": 0.0,
     "cfa_inconsistency": 0.5264,
     "copy_move_phash": 0.0,
-    "prnu_consistency": 0.0,
+    "prnu_consistency": 0.9872,
     "lighting_consistency": 0.4808
   },
   "weights": {
-    "ela": 0.4834,
+    "ela": 0.2839,
     "jpeg_qtable": 0.096,
     "benford_dct": 0.06,
-    "cfa_inconsistency": 0.1326,
+    "cfa_inconsistency": 0.1195,
     "copy_move_phash": 0.096,
-    "prnu_consistency": 0.102,
+    "prnu_consistency": 0.3146,
     "lighting_consistency": 0.03
   },
   "thresholds": {
-    "low": 0.1711,
-    "medium": 0.2211,
-    "high": 0.3211
+    "low": 0.1912,
+    "medium": 0.2412,
+    "high": 0.4434
   },
   "score_stats": {
     "pristine": {
-      "mean": 0.2128,
-      "p95": 0.2443
+      "mean": 0.2089,
+      "p95": 0.2403
     },
     "tampered": {
-      "mean": 0.2527,
-      "p05": 0.2176
+      "mean": 0.4184,
+      "p05": 0.3338
     }
   },
   "notes": [
     "Blended weights: 60% literature prior + 40% synthetic AUC, floor 0.03.",
-    "Overall fused AUC on synthetic split: 0.886"
+    "Overall fused AUC on synthetic split: 0.999"
   ]
 }
