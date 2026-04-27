@@ -22,9 +22,9 @@ COPY fraud_detection ./fraud_detection
 # Install into a relocatable prefix to keep the runtime image small.
 RUN pip install --prefix=/install --upgrade pip \
  && pip install --prefix=/install \
-        anthropic Pillow numpy \
+        anthropic openai Pillow numpy \
         opencv-python-headless scikit-image pypdfium2 \
-        fastapi 'uvicorn[standard]' python-multipart
+        fastapi 'uvicorn[standard]' python-multipart pydantic
 
 
 # --- Stage 2: minimal runtime --------------------------------------------

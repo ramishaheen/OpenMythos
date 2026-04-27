@@ -269,6 +269,10 @@ body {
   font-size: 11px;
   color: var(--text-faint);
 }
+.provider-note {
+  font-style: italic;
+  color: var(--text-dim) !important;
+}
 .field small a { color: var(--gold-soft); text-decoration: none; }
 .field small a:hover { color: var(--gold); }
 

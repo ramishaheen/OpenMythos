@@ -1,36 +1,79 @@
 // MythosBank · Forensic Integrity Console
 // ----------------------------------------------------------------- settings
-const SETTINGS_KEY = "mythos.fraud.settings.v1";
+const SETTINGS_KEY = "mythos.fraud.settings.v2";
+
+const PROVIDER_NOTES = {
+  anthropic: "Vision-capable. Claude inspects images alongside the detector evidence.",
+  deepseek: "Text-only — reasons over the detector JSON. No visual corroboration.",
+  offline: "No LLM. Deterministic local fusion across the seven detectors.",
+};
+const PROVIDER_KEY_LABELS = {
+  anthropic: "Anthropic API key",
+  deepseek: "DeepSeek API key",
+  offline: "(no key needed)",
+};
+const PROVIDER_KEY_LINKS = {
+  anthropic: "https://console.anthropic.com/settings/keys",
+  deepseek: "https://platform.deepseek.com/api_keys",
+  offline: "",
+};
 
 const Settings = {
-  /** @returns {{ apiKey: string, model: string }} */
+  /** @returns {{ provider: string, apiKey: string, model: string }} */
   load() {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if (!raw) return { apiKey: "", model: "claude-sonnet-4-6" };
-      const j = JSON.parse(raw);
-      return {
-        apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
-        model: typeof j.model === "string" ? j.model : "claude-sonnet-4-6",
-      };
-    } catch {
-      return { apiKey: "", model: "claude-sonnet-4-6" };
-    }
+      if (raw) {
+        const j = JSON.parse(raw);
+        return {
+          provider: typeof j.provider === "string" ? j.provider : "anthropic",
+          apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
+          model: typeof j.model === "string" ? j.model : "claude-sonnet-4-6",
+        };
+      }
+      // Migrate v1 → v2 if present.
+      const v1 = localStorage.getItem("mythos.fraud.settings.v1");
+      if (v1) {
+        try {
+          const j = JSON.parse(v1);
+          return {
+            provider: "anthropic",
+            apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
+            model: typeof j.model === "string" ? j.model : "claude-sonnet-4-6",
+          };
+        } catch { /* fall through */ }
+      }
+    } catch { /* ignore */ }
+    return { provider: "anthropic", apiKey: "", model: "claude-sonnet-4-6" };
   },
   save(s) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   },
   clear() {
     localStorage.removeItem(SETTINGS_KEY);
+    localStorage.removeItem("mythos.fraud.settings.v1");
   },
-  /** Return headers to attach to /api/analyze. */
+  /** Headers attached to /api/analyze. */
   authHeaders() {
     const s = Settings.load();
-    const h = {};
-    if (s.apiKey) h["X-Anthropic-Api-Key"] = s.apiKey;
+    const h = { "X-Fraud-Provider": s.provider };
+    if (s.apiKey) h["X-Fraud-Api-Key"] = s.apiKey;
     if (s.model) h["X-Fraud-Model"] = s.model;
     return h;
   },
+};
+
+// Hydrated by /api/settings on load.
+let providerCatalogue = {
+  anthropic: { default_model: "claude-sonnet-4-6",
+               models: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+               supports_vision: true, server_managed: false },
+  deepseek:  { default_model: "deepseek-chat",
+               models: ["deepseek-chat", "deepseek-reasoner"],
+               supports_vision: false, server_managed: false },
+  offline:   { default_model: "local-fusion",
+               models: ["local-fusion"],
+               supports_vision: false, server_managed: false },
 };
 
 // ----------------------------------------------------------------- state
@@ -60,21 +103,25 @@ async function probeHealth() {
     const j = await r.json();
     const sLocal = Settings.load();
     pill.classList.remove("ok", "online");
-    // "online" means there's a usable API key somewhere — server-managed
-    // OR present in this browser's local storage.
-    const clientKeyPresent = !!sLocal.apiKey;
-    if (j.online || clientKeyPresent) {
+
+    const serverHasKey = (j.providers && j.providers[sLocal.provider]) || j.any_server_managed;
+    const clientHasKey = !!sLocal.apiKey;
+    const useOffline = sLocal.provider === "offline";
+
+    if (useOffline) {
+      pill.classList.add("ok");
+      text.textContent = "offline · local fusion only";
+    } else if (clientHasKey || serverHasKey) {
       pill.classList.add("online");
-      const using = clientKeyPresent && !j.online ? sLocal.model : j.model;
-      const tag = clientKeyPresent && !j.online ? "client key" : "server key";
-      text.textContent = `live · ${using} · ${tag}`;
+      const tag = clientHasKey && !serverHasKey ? "client key" : "server key";
+      text.textContent = `live · ${sLocal.provider} · ${sLocal.model} · ${tag}`;
     } else {
       pill.classList.add("ok");
-      text.textContent = `offline · local fusion only`;
+      text.textContent = `offline · ${sLocal.provider} unconfigured`;
     }
-    // Nudge the gear if the user hasn't connected yet.
+    // Nudge the gear if no key is configured anywhere.
     const btn = $("#settings-btn");
-    if (!j.online && !clientKeyPresent) btn.classList.add("attention");
+    if (!useOffline && !clientHasKey && !serverHasKey) btn.classList.add("attention");
     else btn.classList.remove("attention");
   } catch {
     pill.classList.remove("ok", "online");
@@ -88,32 +135,80 @@ async function loadServerSettings() {
     const r = await fetch("/api/settings");
     if (!r.ok) return;
     const j = await r.json();
-    state.serverManaged = !!j.server_managed;
-    if (state.serverManaged) {
-      $("#server-managed-banner").hidden = false;
-      const inp = $("#api-key-input");
-      const sel = $("#model-select");
-      inp.placeholder = "managed by server";
-      inp.disabled = true;
-      sel.disabled = true;
-      $("#settings-test").disabled = false; // can still test the server's key
-      $("#settings-save").disabled = true;
-      $("#settings-clear").disabled = true;
-    }
+    if (j.providers) providerCatalogue = j.providers;
+    state.serverManaged = !!j.any_server_managed;
   } catch { /* ignore */ }
+}
+
+function applyProviderUI(provider) {
+  const cat = providerCatalogue[provider] || {};
+  const isOffline = provider === "offline";
+  const note = $("#provider-note");
+  note.textContent = PROVIDER_NOTES[provider] || "";
+
+  const lbl = $("#api-key-label");
+  lbl.textContent = PROVIDER_KEY_LABELS[provider] || "API key";
+  const link = $("#api-key-link");
+  link.href = PROVIDER_KEY_LINKS[provider] || "#";
+  link.textContent = (PROVIDER_KEY_LINKS[provider] || "").replace(/^https?:\/\//, "")
+                      .split("/")[0] || "—";
+
+  const keyField = $("#api-key-field");
+  keyField.style.display = isOffline ? "none" : "";
+
+  // Populate the model picker for this provider.
+  const modelSel = $("#model-select");
+  const models = (cat.models || []);
+  const defaultModel = cat.default_model || models[0] || "";
+  const labels = {
+    "claude-opus-4-7":   "Opus 4.7 — most capable",
+    "claude-sonnet-4-6": "Sonnet 4.6 — balanced (default)",
+    "claude-haiku-4-5":  "Haiku 4.5 — fastest, cheapest",
+    "deepseek-chat":     "deepseek-chat — fast, OpenAI-compat (default)",
+    "deepseek-reasoner": "deepseek-reasoner — reasoning-tuned",
+    "local-fusion":      "local-fusion — deterministic, no LLM",
+  };
+  modelSel.innerHTML = "";
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = labels[m] || m;
+    if (m === defaultModel) opt.selected = true;
+    modelSel.appendChild(opt);
+  }
+
+  // Server-managed mode for this provider only.
+  const serverManaged = !!cat.server_managed;
+  const inp = $("#api-key-input");
+  inp.disabled = serverManaged || isOffline;
+  inp.placeholder = isOffline ? "no key needed"
+    : serverManaged ? "managed by server" : "sk-…";
+  $("#settings-save").disabled = serverManaged && !isOffline;
+  $("#settings-clear").disabled = isOffline;
+  $("#server-managed-banner").hidden = !(serverManaged && !isOffline);
 }
 
 function openSettings() {
   const ov = $("#settings-overlay");
   ov.hidden = false;
-  // Prefill from localStorage on each open.
   const s = Settings.load();
+  $("#provider-select").value = s.provider in providerCatalogue ? s.provider : "anthropic";
+  applyProviderUI($("#provider-select").value);
   $("#api-key-input").value = s.apiKey;
-  $("#model-select").value = s.model;
+  // Set the model after applyProviderUI has built the options.
+  const modelSel = $("#model-select");
+  if (Array.from(modelSel.options).some(o => o.value === s.model)) {
+    modelSel.value = s.model;
+  }
   $("#test-result").hidden = true;
-  // Focus the field after the slide-in animation.
   setTimeout(() => $("#api-key-input").focus(), 280);
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("#provider-select").addEventListener("change", () => {
+    applyProviderUI($("#provider-select").value);
+  });
+});
 
 function closeSettings() {
   $("#settings-overlay").hidden = true;
@@ -140,11 +235,14 @@ $("#settings-test").addEventListener("click", async () => {
   btn.classList.add("loading");
   out.hidden = true;
   try {
+    const provider = $("#provider-select").value;
     const r = await fetch("/api/settings/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: state.serverManaged ? null : $("#api-key-input").value.trim() || null,
+        provider,
+        api_key: provider === "offline" ? null
+          : ($("#api-key-input").value.trim() || null),
         model: $("#model-select").value,
       }),
     });
@@ -153,7 +251,9 @@ $("#settings-test").addEventListener("click", async () => {
     out.classList.remove("ok", "err");
     if (j.ok) {
       out.classList.add("ok");
-      out.textContent = `Connected to ${j.model} in ${j.latency_ms} ms.`;
+      out.textContent = j.provider === "offline"
+        ? "Offline mode is always available."
+        : `${j.provider}: connected to ${j.model} in ${j.latency_ms} ms.`;
     } else {
       out.classList.add("err");
       out.textContent = j.detail || "connection failed";
@@ -168,23 +268,27 @@ $("#settings-test").addEventListener("click", async () => {
 });
 
 $("#settings-save").addEventListener("click", () => {
-  const apiKey = $("#api-key-input").value.trim();
+  const provider = $("#provider-select").value;
+  const apiKey = provider === "offline" ? "" : $("#api-key-input").value.trim();
   const model = $("#model-select").value;
-  Settings.save({ apiKey, model });
+  Settings.save({ provider, apiKey, model });
   const out = $("#test-result");
   out.hidden = false;
   out.classList.remove("err"); out.classList.add("ok");
-  out.textContent = apiKey
-    ? "Saved to this browser. Future requests will use this key + model."
-    : "Cleared API key. Future requests will use the server-managed key (if any) or run offline.";
+  out.textContent = provider === "offline"
+    ? "Saved. Requests will run in deterministic offline mode."
+    : (apiKey
+        ? `Saved to this browser. Requests will use ${provider} ${model}.`
+        : `Saved provider=${provider}. No key set — requests will fall back to offline.`);
   probeHealth();
   setTimeout(closeSettings, 700);
 });
 
 $("#settings-clear").addEventListener("click", () => {
   Settings.clear();
+  $("#provider-select").value = "anthropic";
+  applyProviderUI("anthropic");
   $("#api-key-input").value = "";
-  $("#model-select").value = "claude-sonnet-4-6";
   const out = $("#test-result");
   out.hidden = false;
   out.classList.remove("err"); out.classList.add("ok");

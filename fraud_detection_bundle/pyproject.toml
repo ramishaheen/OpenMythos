@@ -30,11 +30,13 @@ video = ["opencv-python>=4.8.0"]
 ssim = ["scikit-image>=0.22.0"]
 pdf = ["pypdfium2>=4.20.0"]
 ocr = ["pytesseract>=0.3.10"]
+deepseek = ["openai>=1.40.0"]
 all = [
     "opencv-python>=4.8.0",
     "scikit-image>=0.22.0",
     "pypdfium2>=4.20.0",
     "pytesseract>=0.3.10",
+    "openai>=1.40.0",
 ]
 dev = ["pytest>=8.0.0"]
 

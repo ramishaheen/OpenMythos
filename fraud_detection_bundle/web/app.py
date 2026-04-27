@@ -39,15 +39,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from fraud_detection import FraudDetectionAgent, FraudInput
+from fraud_detection.providers import build_provider, list_providers
 
-# Models the UI is allowed to pick. Restrict to the ones we actually
-# expect to work with the agent's vision + tool-use stack.
-ALLOWED_MODELS = {
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-}
-DEFAULT_MODEL = "claude-sonnet-4-6"
+PROVIDERS = list_providers()
+DEFAULT_PROVIDER = "anthropic"
+DEFAULT_MODEL = PROVIDERS[DEFAULT_PROVIDER]["default_model"]
+ALLOWED_PROVIDERS = set(PROVIDERS.keys())
+
+
+def _allowed_models_for(provider: str) -> set[str]:
+    return set(PROVIDERS.get(provider, {}).get("models", []))
 
 # ---------------------------------------------------------------- config
 ROOT = Path(__file__).parent
@@ -92,48 +93,72 @@ if ALLOWED_ORIGINS:
         allow_headers=["Authorization", "Content-Type"],
     )
 
-# Cache one agent per (api_key, model) tuple — analyzers are stateless and
-# re-using the agent lets the Anthropic SDK's prompt cache hit across
-# requests. Keyed by a hash of the credentials so we don't leak keys into
-# memory dictionaries.
+# Cache one agent per (provider, api_key, model) — analyzers are stateless
+# and re-use means the Anthropic SDK's prompt cache hits across requests.
 _agent_cache: dict[str, FraudDetectionAgent] = {}
 
 
-def _cache_key(api_key: str | None, model: str) -> str:
+def _cache_key(provider: str, api_key: str | None, model: str) -> str:
     h = hashlib.sha256()
+    h.update(provider.encode())
+    h.update(b"|")
     h.update((api_key or "").encode())
     h.update(b"|")
     h.update(model.encode())
     return h.hexdigest()
 
 
-def get_agent(api_key: str | None = None, model: str | None = None) -> FraudDetectionAgent:
-    # Resolve the effective key: explicit > env. The agent itself also
-    # falls back to ANTHROPIC_API_KEY internally; we mirror that here so
-    # the cache key is stable.
-    effective_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or None
-    effective_model = model or DEFAULT_MODEL
-    if effective_model not in ALLOWED_MODELS:
-        raise HTTPException(400, f"model must be one of {sorted(ALLOWED_MODELS)}")
-    ck = _cache_key(effective_key, effective_model)
+def get_agent(
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+) -> FraudDetectionAgent:
+    eff_provider = (provider or DEFAULT_PROVIDER).lower()
+    if eff_provider not in ALLOWED_PROVIDERS:
+        raise HTTPException(400, f"provider must be one of {sorted(ALLOWED_PROVIDERS)}")
+    eff_model = model or PROVIDERS[eff_provider]["default_model"]
+    if eff_model not in _allowed_models_for(eff_provider):
+        raise HTTPException(
+            400,
+            f"model {eff_model} is not valid for provider {eff_provider}",
+        )
+    eff_key = api_key or _server_key_for(eff_provider) or None
+    ck = _cache_key(eff_provider, eff_key, eff_model)
     if ck not in _agent_cache:
-        _agent_cache[ck] = FraudDetectionAgent(api_key=effective_key, model=effective_model)
+        _agent_cache[ck] = FraudDetectionAgent(
+            provider=eff_provider, api_key=eff_key, model=eff_model
+        )
     return _agent_cache[ck]
 
 
-def server_managed_key() -> bool:
-    """True iff the operator has configured an API key on the server."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+def _server_key_for(provider: str) -> str | None:
+    if provider == "anthropic":
+        return os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
+    if provider == "deepseek":
+        return os.environ.get("DEEPSEEK_API_KEY", "").strip() or None
+    return None
+
+
+def server_managed_key(provider: str = DEFAULT_PROVIDER) -> bool:
+    """True iff the operator has configured an API key on the server for
+    the named provider."""
+    return _server_key_for(provider) is not None
+
+
+def any_server_managed_key() -> bool:
+    return any(server_managed_key(p) for p in ALLOWED_PROVIDERS if p != "offline")
 
 
 # ---------------------------------------------------------------- pydantic models
 class TestConnectionRequest(BaseModel):
+    provider: str = Field(default=DEFAULT_PROVIDER)
     api_key: str | None = Field(default=None, min_length=10, max_length=400)
-    model: str = Field(default=DEFAULT_MODEL)
+    model: str | None = None
 
 
 class TestConnectionResponse(BaseModel):
     ok: bool
+    provider: str
     model: str | None = None
     detail: str | None = None
     latency_ms: float | None = None
@@ -184,15 +209,16 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     """Health probe used by the UI and any external uptime checker."""
-    agent = get_agent()
     return {
         "status": "ok",
-        "version": "0.2.0",
-        "model": agent.model,
-        "online": agent._build_client() is not None,
+        "version": "0.3.0",
+        "default_provider": DEFAULT_PROVIDER,
+        "default_model": DEFAULT_MODEL,
+        "any_server_managed": any_server_managed_key(),
         "auth_required": AUTH_TOKEN is not None,
         "max_body_mb": MAX_BODY_MB,
         "reports_persisted": REPORT_DIR is not None,
+        "providers": {p: server_managed_key(p) for p in ALLOWED_PROVIDERS if p != "offline"},
     }
 
 
@@ -201,14 +227,21 @@ def health() -> dict[str, Any]:
 def settings_get() -> dict[str, Any]:
     """Describe what the UI can configure on this deployment.
 
-    Importantly, this never echoes a real API key back. If ops set one via
-    environment, the UI is told `server_managed=True` and disables editing.
+    Never echoes a real API key. For each provider, reports whether the
+    operator has set its key on the server.
     """
     return {
-        "server_managed": server_managed_key(),
-        "default_model": DEFAULT_MODEL,
-        "allowed_models": sorted(ALLOWED_MODELS),
-        "online": get_agent()._build_client() is not None,
+        "default_provider": DEFAULT_PROVIDER,
+        "providers": {
+            name: {
+                "default_model": cfg["default_model"],
+                "models": cfg["models"],
+                "supports_vision": cfg["supports_vision"],
+                "server_managed": server_managed_key(name) if name != "offline" else False,
+            }
+            for name, cfg in PROVIDERS.items()
+        },
+        "any_server_managed": any_server_managed_key(),
     }
 
 
@@ -217,64 +250,107 @@ def settings_test(
     payload: TestConnectionRequest = Body(...),
     authorization: Optional[str] = Header(None),
 ) -> TestConnectionResponse:
-    """Validate an API key by performing the smallest possible API call.
-
-    The key is only used in-memory to construct the SDK client, then dropped.
-    We do not persist it server-side under any circumstance.
+    """Validate a provider+key+model combo by performing the smallest
+    possible API call. The key is held in-memory only and dropped after.
     """
     require_auth(authorization)
 
-    if payload.model not in ALLOWED_MODELS:
+    provider = payload.provider.lower().strip()
+    if provider not in ALLOWED_PROVIDERS:
         return TestConnectionResponse(
             ok=False,
-            detail=f"model must be one of {sorted(ALLOWED_MODELS)}",
+            provider=provider,
+            detail=f"provider must be one of {sorted(ALLOWED_PROVIDERS)}",
         )
-    if server_managed_key() and not payload.api_key:
-        # No key submitted — fall back to the server-managed one.
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-    else:
-        api_key = (payload.api_key or "").strip() or None
+    if provider == "offline":
+        return TestConnectionResponse(
+            ok=True,
+            provider="offline",
+            detail="offline mode is always available",
+            latency_ms=0.0,
+        )
 
+    model = (payload.model or PROVIDERS[provider]["default_model"]).strip()
+    if model not in _allowed_models_for(provider):
+        return TestConnectionResponse(
+            ok=False,
+            provider=provider,
+            detail=f"model {model} is not valid for {provider}; "
+            f"valid: {sorted(_allowed_models_for(provider))}",
+        )
+    api_key = (payload.api_key or "").strip() or _server_key_for(provider)
     if not api_key:
         return TestConnectionResponse(
             ok=False,
+            provider=provider,
+            model=model,
             detail="no api key provided and none configured on the server",
         )
 
+    t0 = time.perf_counter()
+    if provider == "anthropic":
+        return _test_anthropic(api_key, model, t0)
+    if provider == "deepseek":
+        return _test_deepseek(api_key, model, t0)
+    return TestConnectionResponse(
+        ok=False, provider=provider, detail="provider not implemented"
+    )
+
+
+def _test_anthropic(api_key: str, model: str, t0: float) -> TestConnectionResponse:
     try:
         from anthropic import Anthropic  # type: ignore
     except ImportError:
         return TestConnectionResponse(
-            ok=False,
+            ok=False, provider="anthropic", model=model,
             detail="anthropic SDK not installed in this environment",
         )
-
-    t0 = time.perf_counter()
     try:
-        client = Anthropic(api_key=api_key)
-        # Minimum-cost probe: one user token, max_tokens=1, no tool use.
-        client.messages.create(
-            model=payload.model,
-            max_tokens=1,
-            messages=[{"role": "user", "content": "."}],
+        Anthropic(api_key=api_key).messages.create(
+            model=model, max_tokens=1, messages=[{"role": "user", "content": "."}],
         )
     except Exception as e:  # noqa: BLE001
-        msg = str(e)
-        # Don't echo back the API key if it's in the error envelope.
-        if api_key and api_key in msg:
-            msg = msg.replace(api_key, "***")
         return TestConnectionResponse(
-            ok=False,
-            model=payload.model,
-            detail=msg[:240],
+            ok=False, provider="anthropic", model=model,
+            detail=_redact(str(e), api_key)[:240],
             latency_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
     return TestConnectionResponse(
-        ok=True,
-        model=payload.model,
-        detail="connection verified",
+        ok=True, provider="anthropic", model=model, detail="connection verified",
         latency_ms=round((time.perf_counter() - t0) * 1000, 1),
     )
+
+
+def _test_deepseek(api_key: str, model: str, t0: float) -> TestConnectionResponse:
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        return TestConnectionResponse(
+            ok=False, provider="deepseek", model=model,
+            detail="`openai` SDK not installed (DeepSeek uses the OpenAI-compatible client)",
+        )
+    try:
+        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        client.chat.completions.create(
+            model=model, max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except Exception as e:  # noqa: BLE001
+        return TestConnectionResponse(
+            ok=False, provider="deepseek", model=model,
+            detail=_redact(str(e), api_key)[:240],
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+    return TestConnectionResponse(
+        ok=True, provider="deepseek", model=model, detail="connection verified",
+        latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+    )
+
+
+def _redact(text: str, secret: str | None) -> str:
+    if secret and secret in text:
+        return text.replace(secret, "***")
+    return text
 
 
 @app.post("/api/analyze")
@@ -285,18 +361,28 @@ async def analyze(
     references: Optional[list[str]] = Form(None),
     context: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
-    x_anthropic_api_key: Optional[str] = Header(None, alias="X-Anthropic-Api-Key"),
+    x_fraud_provider: Optional[str] = Header(None, alias="X-Fraud-Provider"),
+    x_fraud_api_key: Optional[str] = Header(None, alias="X-Fraud-Api-Key"),
     x_fraud_model: Optional[str] = Header(None, alias="X-Fraud-Model"),
+    x_anthropic_api_key: Optional[str] = Header(None, alias="X-Anthropic-Api-Key"),
 ) -> JSONResponse:
     require_auth(authorization)
 
-    # If ops has configured a server-managed key, don't let clients
-    # override with their own (audit-trail integrity).
-    if server_managed_key():
+    per_request_provider = (x_fraud_provider or "").strip().lower() or None
+    # Back-compat: X-Anthropic-Api-Key still honored for the anthropic provider.
+    raw_key = (x_fraud_api_key or x_anthropic_api_key or "").strip() or None
+    per_request_model = (x_fraud_model or "").strip() or None
+
+    # Resolve provider for this request.
+    resolved_provider = per_request_provider or DEFAULT_PROVIDER
+    if resolved_provider not in ALLOWED_PROVIDERS:
+        raise HTTPException(400, f"X-Fraud-Provider must be one of {sorted(ALLOWED_PROVIDERS)}")
+    # If ops has configured a key for this provider, ignore client overrides
+    # (audit-trail integrity). Offline provider needs no key.
+    if resolved_provider != "offline" and server_managed_key(resolved_provider):
         per_request_key = None
     else:
-        per_request_key = (x_anthropic_api_key or "").strip() or None
-    per_request_model = (x_fraud_model or "").strip() or None
+        per_request_key = raw_key
 
     if len(files) != len(kinds):
         raise HTTPException(400, "kinds[] must be the same length as files[]")
@@ -365,9 +451,11 @@ async def analyze(
         if not agent_inputs:
             raise HTTPException(400, "No analyzable inputs after filtering references.")
 
-        report = get_agent(per_request_key, per_request_model).run(
-            agent_inputs, context=context
-        )
+        report = get_agent(
+            provider=resolved_provider,
+            api_key=per_request_key,
+            model=per_request_model,
+        ).run(agent_inputs, context=context)
         payload = json.loads(report.to_json())
 
         # Persist for audit if configured.

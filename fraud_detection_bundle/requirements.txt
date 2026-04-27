@@ -3,6 +3,9 @@ anthropic>=0.40.0
 Pillow>=10.0.0
 numpy>=1.24.0
 
+# Provider — DeepSeek (OpenAI-compatible client)
+openai>=1.40.0
+
 # Optional — enable specific analyzers / fidelity
 opencv-python>=4.8.0       # video frames + ORB signature matching
 scikit-image>=0.22.0       # SSIM in signature comparison

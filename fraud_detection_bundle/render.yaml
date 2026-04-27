@@ -14,7 +14,11 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      # Set ONE of these (or leave both blank to let users self-serve via the
+      # Settings drawer). Server-managed key disables per-user override.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
         sync: false
       - key: FRAUD_AUTH_TOKEN
         sync: false

@@ -11,6 +11,7 @@ All optional. The service runs in dev mode with auth off if you set none.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | — | Enables Claude vision corroboration. Without it, runs the deterministic offline fusion. |
+| `DEEPSEEK_API_KEY` | — | Enables DeepSeek text-only reasoning over the detector evidence. |
 | `FRAUD_AUTH_TOKEN` | — | When set, `/api/analyze` requires `Authorization: Bearer <token>`. |
 | `FRAUD_ALLOWED_ORIGINS` | — | Comma-separated CORS origins, e.g. `https://console.mythosbank.com`. |
 | `FRAUD_MAX_BODY_MB` | `50` | Per-request body cap. |
@@ -20,12 +21,31 @@ All optional. The service runs in dev mode with auth off if you set none.
 
 Generate a token: `openssl rand -hex 32`.
 
+## Picking a provider
+
+The web UI's Settings drawer lets each user pick **Anthropic Claude**
+(vision-capable), **DeepSeek** (text-only), or **Offline** (deterministic
+local fusion, no LLM). For deployments that should *force* a single
+provider, set its API key as an env var on the host — that disables
+per-user overrides for audit-trail integrity.
+
+| Use case | Set this |
+| --- | --- |
+| Vision corroboration matters (KYC selfies, liveness clips, doctored proof-of-address) | `ANTHROPIC_API_KEY` |
+| You only have a DeepSeek key and want LLM reasoning over detector evidence | `DEEPSEEK_API_KEY` |
+| Self-serve deployment where each user supplies their own key | leave both unset |
+| Air-gapped / offline deployment | leave both unset; users pick "Offline" in Settings |
+
 ## Recipes
 
 ### 1. Local Docker (one-shot, with persistence)
 
 ```bash
+# Pick ONE provider key (or omit and let users pick in the UI):
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+# OR
+echo "DEEPSEEK_API_KEY=sk-..." > .env
+
 echo "FRAUD_AUTH_TOKEN=$(openssl rand -hex 32)" >> .env
 docker compose up --build -d
 docker compose logs -f
