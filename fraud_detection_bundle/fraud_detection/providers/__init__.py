@@ -23,6 +23,7 @@ from fraud_detection.providers.base import (
 from fraud_detection.providers.deepseek_provider import DeepSeekProvider
 from fraud_detection.providers.factory import build_provider, list_providers
 from fraud_detection.providers.offline_provider import OfflineProvider
+from fraud_detection.providers.openai_provider import OpenAIProvider
 
 __all__ = [
     "InputManifest",
@@ -32,6 +33,7 @@ __all__ = [
     "AnthropicProvider",
     "DeepSeekProvider",
     "OfflineProvider",
+    "OpenAIProvider",
     "build_provider",
     "list_providers",
 ]

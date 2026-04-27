@@ -410,6 +410,8 @@ def _env_key_for(provider_name: str) -> str | None:
     """Per-provider env var fallback."""
     if provider_name == "anthropic":
         return os.environ.get("ANTHROPIC_API_KEY")
+    if provider_name == "openai":
+        return os.environ.get("OPENAI_API_KEY")
     if provider_name == "deepseek":
         return os.environ.get("DEEPSEEK_API_KEY")
     return None

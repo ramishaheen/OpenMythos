@@ -16,6 +16,7 @@ from fraud_detection.providers import (
     AnthropicProvider,
     DeepSeekProvider,
     OfflineProvider,
+    OpenAIProvider,
     Provider,
     ProviderInput,
     ProviderResult,
@@ -47,8 +48,11 @@ def test_offline_provider_runs(img: Path, monkeypatch: pytest.MonkeyPatch) -> No
 # ---------------------------------------------------------------- factory
 def test_factory_falls_back_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     p = build_provider("anthropic", api_key=None)
+    assert isinstance(p, OfflineProvider), "should fall back when no key"
+    p = build_provider("openai", api_key=None)
     assert isinstance(p, OfflineProvider), "should fall back when no key"
     p = build_provider("deepseek", api_key=None)
     assert isinstance(p, OfflineProvider), "should fall back when no key"
@@ -62,13 +66,28 @@ def test_factory_rejects_unknown_provider() -> None:
 def test_factory_rejects_unknown_model() -> None:
     with pytest.raises(ValueError, match="unknown anthropic model"):
         build_provider("anthropic", api_key="sk-ant-x", model="claude-1-anything")
+    with pytest.raises(ValueError, match="unknown openai model"):
+        build_provider("openai", api_key="sk-x", model="gpt-3.5")
+    with pytest.raises(ValueError, match="unknown deepseek model"):
+        build_provider("deepseek", api_key="sk-x", model="not-a-deepseek-model")
 
 
 # ---------------------------------------------------------------- supports_vision
 def test_supports_vision_flag() -> None:
     assert AnthropicProvider().supports_vision is True
+    assert OpenAIProvider().supports_vision is True
     assert DeepSeekProvider().supports_vision is False
     assert OfflineProvider().supports_vision is False
+
+
+def test_openai_provider_unconfigured_raises() -> None:
+    """OpenAIProvider must refuse to summarize without a key."""
+    p = OpenAIProvider(api_key=None)
+    assert p.configured() is False
+    with pytest.raises(RuntimeError, match="not configured"):
+        p.summarize(
+            ProviderInput(inputs=[], aggregate_score=0.0, aggregate_risk="minimal")
+        )
 
 
 # ---------------------------------------------------------------- fake provider

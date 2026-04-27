@@ -10,7 +10,8 @@ All optional. The service runs in dev mode with auth off if you set none.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | — | Enables Claude vision corroboration. Without it, runs the deterministic offline fusion. |
+| `ANTHROPIC_API_KEY` | — | Enables Claude vision corroboration (vision-capable). |
+| `OPENAI_API_KEY` | — | Enables GPT-4o vision corroboration (vision-capable). |
 | `DEEPSEEK_API_KEY` | — | Enables DeepSeek text-only reasoning over the detector evidence. |
 | `FRAUD_AUTH_TOKEN` | — | When set, `/api/analyze` requires `Authorization: Bearer <token>`. |
 | `FRAUD_ALLOWED_ORIGINS` | — | Comma-separated CORS origins, e.g. `https://console.mythosbank.com`. |
@@ -31,10 +32,11 @@ per-user overrides for audit-trail integrity.
 
 | Use case | Set this |
 | --- | --- |
-| Vision corroboration matters (KYC selfies, liveness clips, doctored proof-of-address) | `ANTHROPIC_API_KEY` |
-| You only have a DeepSeek key and want LLM reasoning over detector evidence | `DEEPSEEK_API_KEY` |
-| Self-serve deployment where each user supplies their own key | leave both unset |
-| Air-gapped / offline deployment | leave both unset; users pick "Offline" in Settings |
+| Vision corroboration on Claude (KYC selfies, liveness, doctored proof-of-address) | `ANTHROPIC_API_KEY` |
+| Vision corroboration on OpenAI GPT-4o (same use case, OpenAI account) | `OPENAI_API_KEY` |
+| Text-only LLM reasoning, you only have a DeepSeek key | `DEEPSEEK_API_KEY` |
+| Self-serve — each user supplies their own key in the UI | leave all unset |
+| Air-gapped / offline | leave all unset; users pick "Offline" in Settings |
 
 ## Recipes
 

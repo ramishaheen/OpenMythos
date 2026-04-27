@@ -134,6 +134,8 @@ def get_agent(
 def _server_key_for(provider: str) -> str | None:
     if provider == "anthropic":
         return os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
+    if provider == "openai":
+        return os.environ.get("OPENAI_API_KEY", "").strip() or None
     if provider == "deepseek":
         return os.environ.get("DEEPSEEK_API_KEY", "").strip() or None
     return None
@@ -290,6 +292,8 @@ def settings_test(
     t0 = time.perf_counter()
     if provider == "anthropic":
         return _test_anthropic(api_key, model, t0)
+    if provider == "openai":
+        return _test_openai(api_key, model, t0)
     if provider == "deepseek":
         return _test_deepseek(api_key, model, t0)
     return TestConnectionResponse(
@@ -317,6 +321,32 @@ def _test_anthropic(api_key: str, model: str, t0: float) -> TestConnectionRespon
         )
     return TestConnectionResponse(
         ok=True, provider="anthropic", model=model, detail="connection verified",
+        latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+    )
+
+
+def _test_openai(api_key: str, model: str, t0: float) -> TestConnectionResponse:
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        return TestConnectionResponse(
+            ok=False, provider="openai", model=model,
+            detail="`openai` SDK not installed in this environment",
+        )
+    try:
+        client = OpenAI(api_key=api_key)  # default base_url=api.openai.com/v1
+        client.chat.completions.create(
+            model=model, max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except Exception as e:  # noqa: BLE001
+        return TestConnectionResponse(
+            ok=False, provider="openai", model=model,
+            detail=_redact(str(e), api_key)[:240],
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+    return TestConnectionResponse(
+        ok=True, provider="openai", model=model, detail="connection verified",
         latency_ms=round((time.perf_counter() - t0) * 1000, 1),
     )
 

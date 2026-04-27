@@ -4,16 +4,19 @@ const SETTINGS_KEY = "mythos.fraud.settings.v2";
 
 const PROVIDER_NOTES = {
   anthropic: "Vision-capable. Claude inspects images alongside the detector evidence.",
+  openai: "Vision-capable. GPT-4o inspects images alongside the detector evidence.",
   deepseek: "Text-only — reasons over the detector JSON. No visual corroboration.",
   offline: "No LLM. Deterministic local fusion across the seven detectors.",
 };
 const PROVIDER_KEY_LABELS = {
   anthropic: "Anthropic API key",
+  openai: "OpenAI API key",
   deepseek: "DeepSeek API key",
   offline: "(no key needed)",
 };
 const PROVIDER_KEY_LINKS = {
   anthropic: "https://console.anthropic.com/settings/keys",
+  openai: "https://platform.openai.com/api-keys",
   deepseek: "https://platform.deepseek.com/api_keys",
   offline: "",
 };
@@ -67,6 +70,9 @@ const Settings = {
 let providerCatalogue = {
   anthropic: { default_model: "claude-sonnet-4-6",
                models: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+               supports_vision: true, server_managed: false },
+  openai:    { default_model: "gpt-4o",
+               models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
                supports_vision: true, server_managed: false },
   deepseek:  { default_model: "deepseek-chat",
                models: ["deepseek-chat", "deepseek-reasoner"],
@@ -164,6 +170,9 @@ function applyProviderUI(provider) {
     "claude-opus-4-7":   "Opus 4.7 — most capable",
     "claude-sonnet-4-6": "Sonnet 4.6 — balanced (default)",
     "claude-haiku-4-5":  "Haiku 4.5 — fastest, cheapest",
+    "gpt-4o":            "GPT-4o — vision + JSON (default)",
+    "gpt-4o-mini":       "GPT-4o-mini — vision, cheaper",
+    "gpt-4-turbo":       "GPT-4 Turbo — vision, older",
     "deepseek-chat":     "deepseek-chat — fast, OpenAI-compat (default)",
     "deepseek-reasoner": "deepseek-reasoner — reasoning-tuned",
     "local-fusion":      "local-fusion — deterministic, no LLM",

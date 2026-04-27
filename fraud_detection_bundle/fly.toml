@@ -2,8 +2,9 @@
 #
 # Bootstrap:
 #   fly launch --no-deploy --copy-config --name mythos-fraud-detection
-#   # Choose ONE of these (or both — UI lets the user pick a provider)
+#   # Choose any of these — the Settings drawer lets users pick a provider.
 #   fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+#   fly secrets set OPENAI_API_KEY=sk-...
 #   fly secrets set DEEPSEEK_API_KEY=sk-...
 #   fly secrets set FRAUD_AUTH_TOKEN=$(openssl rand -hex 32)
 #   fly volumes create fraud_reports --size 1
