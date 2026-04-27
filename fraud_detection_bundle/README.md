@@ -110,7 +110,23 @@ constitute court-admissible evidence.** Use it as high-quality screening
 that surfaces candidates for an expert reviewer, who will run dedicated
 tools (e.g. Amped Authenticate, Belkasoft, X-Ways) and provide testimony.
 
-## Install
+## Try it without installing anything — GitHub Codespaces
+
+Click **Code → Codespaces → Create codespace on
+`claude/document-fraud-detection-Xixkd`** in the GitHub UI.
+
+The repo's `.devcontainer/` config will:
+
+1. Build a Python 3.12 container.
+2. Install the package + web deps + optional analyzers.
+3. Boot `uvicorn` on port 8000.
+4. Auto-forward port 8000 to a public HTTPS URL (`https://<codespace>-8000.app.github.dev`).
+5. Open that URL in a new browser tab.
+
+Total time: ~30 seconds on first launch, ~5 s after that.
+No local install, no tunnel setup, no laptop networking issues.
+
+## Install locally
 
 **Fastest — one-command launcher** (creates a venv, installs deps, opens
 the browser):
