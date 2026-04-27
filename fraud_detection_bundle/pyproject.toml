@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fraud-detection"
+version = "0.1.0"
+description = "Document, image, video, and signature fraud-detection agent for MythosBanking. Powered by Claude."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "MythosBanking" }]
+keywords = [
+    "fraud-detection",
+    "image-forensics",
+    "signature-verification",
+    "deepfake-detection",
+    "document-forgery",
+    "anthropic",
+    "claude",
+]
+dependencies = [
+    "anthropic>=0.40.0",
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+video = ["opencv-python>=4.8.0"]
+ssim = ["scikit-image>=0.22.0"]
+pdf = ["pypdfium2>=4.20.0"]
+ocr = ["pytesseract>=0.3.10"]
+all = [
+    "opencv-python>=4.8.0",
+    "scikit-image>=0.22.0",
+    "pypdfium2>=4.20.0",
+    "pytesseract>=0.3.10",
+]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+fraud-detect = "fraud_detection.cli:main"
+
+[tool.setuptools]
+packages = ["fraud_detection"]

@@ -1,0 +1,14 @@
+# Core (required)
+anthropic>=0.40.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Optional — enable specific analyzers / fidelity
+opencv-python>=4.8.0       # video frames + ORB signature matching
+scikit-image>=0.22.0       # SSIM in signature comparison
+pypdfium2>=4.20.0          # preferred PDF rasterizer
+# pdf2image>=1.17.0        # alternative PDF rasterizer (needs poppler)
+pytesseract>=0.3.10        # OCR for document text-anomaly checks
+
+# Dev / test
+pytest>=8.0.0
