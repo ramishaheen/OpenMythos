@@ -1,0 +1,37 @@
+[Unit]
+Description=MythosBank Fraud Detection web service
+Documentation=https://github.com/ramishaheen/MythosBanking
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mythos
+Group=mythos
+WorkingDirectory=/opt/mythos-fraud-detection
+EnvironmentFile=/etc/mythos-fraud-detection.env
+ExecStart=/opt/mythos-fraud-detection/.venv/bin/uvicorn web.app:app \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --workers 4 \
+  --proxy-headers
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fraud_reports
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

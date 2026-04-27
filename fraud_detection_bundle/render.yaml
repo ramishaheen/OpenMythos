@@ -1,0 +1,32 @@
+# Render.com infrastructure-as-code.
+#
+# 1. Push this repo to GitHub.
+# 2. New + → Blueprint → point at the repo → Render reads this file.
+# 3. Set ANTHROPIC_API_KEY and FRAUD_AUTH_TOKEN as encrypted env vars
+#    in the dashboard (sync=false marks them as secrets to set manually).
+
+services:
+  - type: web
+    name: mythos-fraud-detection
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # bump to `standard` for >512 MB RAM
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FRAUD_AUTH_TOKEN
+        sync: false
+      - key: FRAUD_ALLOWED_ORIGINS
+        sync: false
+      - key: FRAUD_MAX_BODY_MB
+        value: "50"
+      - key: FRAUD_LOG_LEVEL
+        value: INFO
+      - key: FRAUD_REPORT_DIR
+        value: /var/lib/fraud_reports
+    disk:
+      name: fraud-reports
+      mountPath: /var/lib/fraud_reports
+      sizeGB: 1

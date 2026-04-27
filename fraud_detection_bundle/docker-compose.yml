@@ -1,0 +1,29 @@
+services:
+  fraud-detection:
+    build: .
+    image: mythos-fraud-detection:0.2.0
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FRAUD_AUTH_TOKEN: ${FRAUD_AUTH_TOKEN:-}
+      FRAUD_ALLOWED_ORIGINS: ${FRAUD_ALLOWED_ORIGINS:-}
+      FRAUD_MAX_BODY_MB: ${FRAUD_MAX_BODY_MB:-50}
+      FRAUD_REPORT_DIR: /var/lib/fraud_reports
+      FRAUD_LOG_LEVEL: ${FRAUD_LOG_LEVEL:-INFO}
+    volumes:
+      - reports:/var/lib/fraud_reports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  reports: {}
