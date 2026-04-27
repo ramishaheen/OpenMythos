@@ -1,9 +1,44 @@
 // MythosBank · Forensic Integrity Console
+// ----------------------------------------------------------------- settings
+const SETTINGS_KEY = "mythos.fraud.settings.v1";
+
+const Settings = {
+  /** @returns {{ apiKey: string, model: string }} */
+  load() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return { apiKey: "", model: "claude-sonnet-4-6" };
+      const j = JSON.parse(raw);
+      return {
+        apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
+        model: typeof j.model === "string" ? j.model : "claude-sonnet-4-6",
+      };
+    } catch {
+      return { apiKey: "", model: "claude-sonnet-4-6" };
+    }
+  },
+  save(s) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  },
+  clear() {
+    localStorage.removeItem(SETTINGS_KEY);
+  },
+  /** Return headers to attach to /api/analyze. */
+  authHeaders() {
+    const s = Settings.load();
+    const h = {};
+    if (s.apiKey) h["X-Anthropic-Api-Key"] = s.apiKey;
+    if (s.model) h["X-Fraud-Model"] = s.model;
+    return h;
+  },
+};
+
 // ----------------------------------------------------------------- state
 const state = {
   /** @type {{ id: string, file: File, kind: string, refOf: string|null }[]} */
   files: [],
   busy: false,
+  serverManaged: false,
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -23,19 +58,139 @@ async function probeHealth() {
     const r = await fetch("/api/health");
     if (!r.ok) throw new Error(r.statusText);
     const j = await r.json();
+    const sLocal = Settings.load();
     pill.classList.remove("ok", "online");
-    if (j.online) {
+    // "online" means there's a usable API key somewhere — server-managed
+    // OR present in this browser's local storage.
+    const clientKeyPresent = !!sLocal.apiKey;
+    if (j.online || clientKeyPresent) {
       pill.classList.add("online");
-      text.textContent = `live · ${j.model}`;
+      const using = clientKeyPresent && !j.online ? sLocal.model : j.model;
+      const tag = clientKeyPresent && !j.online ? "client key" : "server key";
+      text.textContent = `live · ${using} · ${tag}`;
     } else {
       pill.classList.add("ok");
-      text.textContent = `offline mode · ${j.model || "local fusion"}`;
+      text.textContent = `offline · local fusion only`;
     }
+    // Nudge the gear if the user hasn't connected yet.
+    const btn = $("#settings-btn");
+    if (!j.online && !clientKeyPresent) btn.classList.add("attention");
+    else btn.classList.remove("attention");
   } catch {
     pill.classList.remove("ok", "online");
     text.textContent = "backend unreachable";
   }
 }
+
+// ----------------------------------------------------------------- settings drawer
+async function loadServerSettings() {
+  try {
+    const r = await fetch("/api/settings");
+    if (!r.ok) return;
+    const j = await r.json();
+    state.serverManaged = !!j.server_managed;
+    if (state.serverManaged) {
+      $("#server-managed-banner").hidden = false;
+      const inp = $("#api-key-input");
+      const sel = $("#model-select");
+      inp.placeholder = "managed by server";
+      inp.disabled = true;
+      sel.disabled = true;
+      $("#settings-test").disabled = false; // can still test the server's key
+      $("#settings-save").disabled = true;
+      $("#settings-clear").disabled = true;
+    }
+  } catch { /* ignore */ }
+}
+
+function openSettings() {
+  const ov = $("#settings-overlay");
+  ov.hidden = false;
+  // Prefill from localStorage on each open.
+  const s = Settings.load();
+  $("#api-key-input").value = s.apiKey;
+  $("#model-select").value = s.model;
+  $("#test-result").hidden = true;
+  // Focus the field after the slide-in animation.
+  setTimeout(() => $("#api-key-input").focus(), 280);
+}
+
+function closeSettings() {
+  $("#settings-overlay").hidden = true;
+}
+
+$("#settings-btn").addEventListener("click", openSettings);
+$("#settings-close").addEventListener("click", closeSettings);
+$("#settings-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "settings-overlay") closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#settings-overlay").hidden) closeSettings();
+});
+
+$("#api-key-toggle").addEventListener("click", () => {
+  const el = $("#api-key-input");
+  el.type = el.type === "password" ? "text" : "password";
+});
+
+$("#settings-test").addEventListener("click", async () => {
+  const btn = $("#settings-test");
+  const out = $("#test-result");
+  if (btn.classList.contains("loading")) return;
+  btn.classList.add("loading");
+  out.hidden = true;
+  try {
+    const r = await fetch("/api/settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: state.serverManaged ? null : $("#api-key-input").value.trim() || null,
+        model: $("#model-select").value,
+      }),
+    });
+    const j = await r.json();
+    out.hidden = false;
+    out.classList.remove("ok", "err");
+    if (j.ok) {
+      out.classList.add("ok");
+      out.textContent = `Connected to ${j.model} in ${j.latency_ms} ms.`;
+    } else {
+      out.classList.add("err");
+      out.textContent = j.detail || "connection failed";
+    }
+  } catch (e) {
+    out.hidden = false;
+    out.classList.remove("ok"); out.classList.add("err");
+    out.textContent = `request failed: ${e.message}`;
+  } finally {
+    btn.classList.remove("loading");
+  }
+});
+
+$("#settings-save").addEventListener("click", () => {
+  const apiKey = $("#api-key-input").value.trim();
+  const model = $("#model-select").value;
+  Settings.save({ apiKey, model });
+  const out = $("#test-result");
+  out.hidden = false;
+  out.classList.remove("err"); out.classList.add("ok");
+  out.textContent = apiKey
+    ? "Saved to this browser. Future requests will use this key + model."
+    : "Cleared API key. Future requests will use the server-managed key (if any) or run offline.";
+  probeHealth();
+  setTimeout(closeSettings, 700);
+});
+
+$("#settings-clear").addEventListener("click", () => {
+  Settings.clear();
+  $("#api-key-input").value = "";
+  $("#model-select").value = "claude-sonnet-4-6";
+  const out = $("#test-result");
+  out.hidden = false;
+  out.classList.remove("err"); out.classList.add("ok");
+  out.textContent = "Settings cleared from this browser.";
+  probeHealth();
+});
 
 // ----------------------------------------------------------------- file picker
 const dz = $("#dropzone");
@@ -169,7 +324,11 @@ $("#submit-btn").addEventListener("click", async () => {
   if (ctx) form.append("context", ctx);
 
   try {
-    const r = await fetch("/api/analyze", { method: "POST", body: form });
+    const r = await fetch("/api/analyze", {
+      method: "POST",
+      body: form,
+      headers: Settings.authHeaders(),
+    });
     if (!r.ok) {
       const err = await safeJSON(r);
       throw new Error(err?.detail || `Server returned ${r.status}`);
@@ -378,5 +537,6 @@ function animateRing(el, score) {
 }
 
 // ----------------------------------------------------------------- boot
+loadServerSettings();
 probeHealth();
 setInterval(probeHealth, 30000);

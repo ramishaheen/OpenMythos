@@ -33,10 +33,104 @@
         <div class="brand-sub">Forensic Integrity Console</div>
       </div>
     </div>
-    <div class="status-pill" id="health-pill">
-      <span class="dot"></span> <span id="health-text">connecting…</span>
+    <div class="topbar-actions">
+      <button id="settings-btn" class="icon-btn" title="API connection &amp; settings"
+              aria-label="Open settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1A2 2 0 1 1 4.3 16.9l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>
+        </svg>
+      </button>
+      <div class="status-pill" id="health-pill">
+        <span class="dot"></span> <span id="health-text">connecting…</span>
+      </div>
     </div>
   </header>
+
+  <!-- Settings drawer -->
+  <div id="settings-overlay" class="overlay" hidden>
+    <aside id="settings-drawer" class="drawer" role="dialog" aria-modal="true"
+           aria-labelledby="settings-title">
+      <header class="drawer-head">
+        <div>
+          <h2 id="settings-title">API connection</h2>
+          <p>Connect this console to the Claude API. Your key is stored only in
+             this browser's local storage and never sent to anyone except
+             Anthropic on each request.</p>
+        </div>
+        <button id="settings-close" class="icon-btn" aria-label="Close settings">
+          <svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+
+      <section class="drawer-body">
+        <div id="server-managed-banner" class="banner" hidden>
+          <strong>Server-managed.</strong>
+          The operator has configured an API key on this deployment. Per-user
+          overrides are disabled for audit-trail integrity.
+        </div>
+
+        <label class="field">
+          <span>Anthropic API key</span>
+          <div class="input-row">
+            <input id="api-key-input" type="password" autocomplete="off"
+                   spellcheck="false" placeholder="sk-ant-…" />
+            <button id="api-key-toggle" type="button" class="ghost small"
+                    title="Show / hide" aria-label="Toggle visibility">
+              <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z"
+                fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            </button>
+          </div>
+          <small>Get one at <a href="https://console.anthropic.com/settings/keys"
+            target="_blank" rel="noopener">console.anthropic.com</a>.</small>
+        </label>
+
+        <label class="field">
+          <span>Model</span>
+          <select id="model-select">
+            <option value="claude-opus-4-7">Opus 4.7 — most capable</option>
+            <option value="claude-sonnet-4-6" selected>Sonnet 4.6 — balanced (default)</option>
+            <option value="claude-haiku-4-5">Haiku 4.5 — fastest, cheapest</option>
+          </select>
+        </label>
+
+        <div id="test-result" class="test-result" hidden></div>
+
+        <div class="drawer-actions">
+          <button id="settings-test" class="ghost">
+            <span class="label">Test connection</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+          <div class="spacer"></div>
+          <button id="settings-clear" class="ghost danger">Clear</button>
+          <button id="settings-save" class="primary small">Save</button>
+        </div>
+
+        <details class="advanced">
+          <summary>Advanced</summary>
+          <div class="advanced-grid">
+            <div>
+              <span class="muted">Storage</span>
+              <code>browser localStorage</code>
+            </div>
+            <div>
+              <span class="muted">Sent as</span>
+              <code>X-Anthropic-Api-Key</code>
+            </div>
+            <div>
+              <span class="muted">Persisted on server</span>
+              <code>never</code>
+            </div>
+            <div>
+              <span class="muted">Reset</span>
+              <code>Clear button above</code>
+            </div>
+          </div>
+        </details>
+      </section>
+    </aside>
+  </div>
 
   <main class="layout">
     <!-- LEFT: Submission panel -->

@@ -19,6 +19,7 @@ Configuration (all optional):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,13 +31,23 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from fraud_detection import FraudDetectionAgent, FraudInput
+
+# Models the UI is allowed to pick. Restrict to the ones we actually
+# expect to work with the agent's vision + tool-use stack.
+ALLOWED_MODELS = {
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+}
+DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # ---------------------------------------------------------------- config
 ROOT = Path(__file__).parent
@@ -81,16 +92,51 @@ if ALLOWED_ORIGINS:
         allow_headers=["Authorization", "Content-Type"],
     )
 
-# Cache one agent instance — analyzers are stateless and re-use lets the
-# Anthropic SDK's prompt cache hit across requests.
-_agent: FraudDetectionAgent | None = None
+# Cache one agent per (api_key, model) tuple — analyzers are stateless and
+# re-using the agent lets the Anthropic SDK's prompt cache hit across
+# requests. Keyed by a hash of the credentials so we don't leak keys into
+# memory dictionaries.
+_agent_cache: dict[str, FraudDetectionAgent] = {}
 
 
-def get_agent() -> FraudDetectionAgent:
-    global _agent
-    if _agent is None:
-        _agent = FraudDetectionAgent()
-    return _agent
+def _cache_key(api_key: str | None, model: str) -> str:
+    h = hashlib.sha256()
+    h.update((api_key or "").encode())
+    h.update(b"|")
+    h.update(model.encode())
+    return h.hexdigest()
+
+
+def get_agent(api_key: str | None = None, model: str | None = None) -> FraudDetectionAgent:
+    # Resolve the effective key: explicit > env. The agent itself also
+    # falls back to ANTHROPIC_API_KEY internally; we mirror that here so
+    # the cache key is stable.
+    effective_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or None
+    effective_model = model or DEFAULT_MODEL
+    if effective_model not in ALLOWED_MODELS:
+        raise HTTPException(400, f"model must be one of {sorted(ALLOWED_MODELS)}")
+    ck = _cache_key(effective_key, effective_model)
+    if ck not in _agent_cache:
+        _agent_cache[ck] = FraudDetectionAgent(api_key=effective_key, model=effective_model)
+    return _agent_cache[ck]
+
+
+def server_managed_key() -> bool:
+    """True iff the operator has configured an API key on the server."""
+    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+
+
+# ---------------------------------------------------------------- pydantic models
+class TestConnectionRequest(BaseModel):
+    api_key: str | None = Field(default=None, min_length=10, max_length=400)
+    model: str = Field(default=DEFAULT_MODEL)
+
+
+class TestConnectionResponse(BaseModel):
+    ok: bool
+    model: str | None = None
+    detail: str | None = None
+    latency_ms: float | None = None
 
 
 # ---------------------------------------------------------------- middleware
@@ -150,6 +196,87 @@ def health() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- /api/settings
+@app.get("/api/settings")
+def settings_get() -> dict[str, Any]:
+    """Describe what the UI can configure on this deployment.
+
+    Importantly, this never echoes a real API key back. If ops set one via
+    environment, the UI is told `server_managed=True` and disables editing.
+    """
+    return {
+        "server_managed": server_managed_key(),
+        "default_model": DEFAULT_MODEL,
+        "allowed_models": sorted(ALLOWED_MODELS),
+        "online": get_agent()._build_client() is not None,
+    }
+
+
+@app.post("/api/settings/test", response_model=TestConnectionResponse)
+def settings_test(
+    payload: TestConnectionRequest = Body(...),
+    authorization: Optional[str] = Header(None),
+) -> TestConnectionResponse:
+    """Validate an API key by performing the smallest possible API call.
+
+    The key is only used in-memory to construct the SDK client, then dropped.
+    We do not persist it server-side under any circumstance.
+    """
+    require_auth(authorization)
+
+    if payload.model not in ALLOWED_MODELS:
+        return TestConnectionResponse(
+            ok=False,
+            detail=f"model must be one of {sorted(ALLOWED_MODELS)}",
+        )
+    if server_managed_key() and not payload.api_key:
+        # No key submitted — fall back to the server-managed one.
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    else:
+        api_key = (payload.api_key or "").strip() or None
+
+    if not api_key:
+        return TestConnectionResponse(
+            ok=False,
+            detail="no api key provided and none configured on the server",
+        )
+
+    try:
+        from anthropic import Anthropic  # type: ignore
+    except ImportError:
+        return TestConnectionResponse(
+            ok=False,
+            detail="anthropic SDK not installed in this environment",
+        )
+
+    t0 = time.perf_counter()
+    try:
+        client = Anthropic(api_key=api_key)
+        # Minimum-cost probe: one user token, max_tokens=1, no tool use.
+        client.messages.create(
+            model=payload.model,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "."}],
+        )
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        # Don't echo back the API key if it's in the error envelope.
+        if api_key and api_key in msg:
+            msg = msg.replace(api_key, "***")
+        return TestConnectionResponse(
+            ok=False,
+            model=payload.model,
+            detail=msg[:240],
+            latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+    return TestConnectionResponse(
+        ok=True,
+        model=payload.model,
+        detail="connection verified",
+        latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+    )
+
+
 @app.post("/api/analyze")
 async def analyze(
     files: list[UploadFile] = File(...),
@@ -158,8 +285,18 @@ async def analyze(
     references: Optional[list[str]] = Form(None),
     context: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
+    x_anthropic_api_key: Optional[str] = Header(None, alias="X-Anthropic-Api-Key"),
+    x_fraud_model: Optional[str] = Header(None, alias="X-Fraud-Model"),
 ) -> JSONResponse:
     require_auth(authorization)
+
+    # If ops has configured a server-managed key, don't let clients
+    # override with their own (audit-trail integrity).
+    if server_managed_key():
+        per_request_key = None
+    else:
+        per_request_key = (x_anthropic_api_key or "").strip() or None
+    per_request_model = (x_fraud_model or "").strip() or None
 
     if len(files) != len(kinds):
         raise HTTPException(400, "kinds[] must be the same length as files[]")
@@ -228,7 +365,9 @@ async def analyze(
         if not agent_inputs:
             raise HTTPException(400, "No analyzable inputs after filtering references.")
 
-        report = get_agent().run(agent_inputs, context=context)
+        report = get_agent(per_request_key, per_request_model).run(
+            agent_inputs, context=context
+        )
         payload = json.loads(report.to_json())
 
         # Persist for audit if configured.
