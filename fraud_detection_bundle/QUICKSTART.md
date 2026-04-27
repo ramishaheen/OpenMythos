@@ -90,13 +90,43 @@ The launcher:
 4. Opens a 1280 × 820 native window pointing at it.
 5. Shuts uvicorn down cleanly when you close the window.
 
-### Build a redistributable binary (PyInstaller)
+### One-shot: build and export to Desktop
+
+```bash
+./build_and_export.sh        # macOS / Linux / WSL
+./build_and_export.ps1       # Windows PowerShell
+```
+
+This runs the full build and **copies the result onto your Desktop**:
+
+| OS | What lands on `~/Desktop` |
+| --- | --- |
+| macOS | `MythosBankFraudDetection.app` — double-click in Finder. |
+| Windows | `MythosBankFraudDetection.exe` — double-click in Explorer. |
+| Linux | `MythosBankFraudDetection` (ELF) — chmod +x, double-click or run. |
+
+The script handles venv setup, dependency install (including PyInstaller
+and pywebview), the build, and the copy. ~1 minute end-to-end the first
+time, ~30 s on re-builds.
+
+**Cross-compilation is not supported.** Run the script on the target OS
+itself; the binary is native to that platform.
+
+**Validated build pipeline.** This bundle's PyInstaller spec was
+verified end-to-end in a Linux sandbox: 46 MB binary, FastAPI boots
+inside it, `/api/health` returns 200 from the bundled server, the
+pywebview layer activates and tries to import system Gtk — exactly
+the path you want before the system webview opens the window.
+
+### Manual: same build, no auto-copy
 
 ```bash
 source .venv/bin/activate
-pip install pyinstaller
+pip install pyinstaller pywebview
 pyinstaller desktop_app.spec
-# → dist/MythosBankFraudDetection (Linux/macOS) or .exe (Windows)
+# → dist/MythosBankFraudDetection.app   (macOS .app bundle)
+# → dist/MythosBankFraudDetection       (Linux ELF)
+# → dist/MythosBankFraudDetection.exe   (Windows)
 ```
 
 The spec excludes the heaviest optional analyzers (opencv, skimage,

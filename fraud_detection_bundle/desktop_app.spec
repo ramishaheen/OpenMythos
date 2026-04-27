@@ -14,9 +14,11 @@
 # providers in the binary.
 
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve()
+IS_MACOS = sys.platform == "darwin"
 
 a = Analysis(
     [str(ROOT / "desktop_app.py")],
@@ -107,3 +109,20 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+# macOS: also wrap into a double-clickable .app bundle.
+if IS_MACOS:
+    app = BUNDLE(
+        exe,
+        name="MythosBankFraudDetection.app",
+        icon=None,
+        bundle_identifier="com.mythosbank.fraud-detection",
+        info_plist={
+            "CFBundleDisplayName": "MythosBank Fraud Detection",
+            "CFBundleShortVersionString": "0.3.0",
+            "CFBundleVersion": "0.3.0",
+            "NSHighResolutionCapable": True,
+            "LSApplicationCategoryType": "public.app-category.business",
+            "NSHumanReadableCopyright": "Forensic Integrity Console",
+        },
+    )
