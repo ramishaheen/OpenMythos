@@ -156,6 +156,21 @@ fraud-detect -k signature -r ref.png questioned.png --context "wire authorizatio
 fraud-detect liveness.mp4 --json
 ```
 
+## Web UI
+
+A polished, animated front-end ships in `web/`:
+
+```bash
+pip install -r web/requirements.txt
+uvicorn web.app:app --reload --port 8000
+# open http://localhost:8000
+```
+
+It gives you drag-and-drop uploads, per-file controls, signature
+reference picking, an animated verdict ring, per-detector bar charts,
+copy-to-clipboard reproducibility hashes, and a one-click JSON
+report download. See `web/README.md` for production deployment notes.
+
 ## Risk bands (synthetic-calibrated; re-tune for production)
 
 | Score | Risk | Suggested action |

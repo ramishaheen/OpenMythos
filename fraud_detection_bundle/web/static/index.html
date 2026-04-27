@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MythosBank · Fraud Detection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true">
+    <span></span><span></span><span></span>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#d4af37"/>
+            <stop offset="100%" stop-color="#a87b1c"/>
+          </linearGradient>
+        </defs>
+        <path d="M32 4 L56 14 V32 C56 46 44 56 32 60 C20 56 8 46 8 32 V14 Z"
+              fill="none" stroke="url(#g)" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="28" cy="30" r="9" fill="none" stroke="url(#g)" stroke-width="2.2"/>
+        <line x1="35" y1="37" x2="44" y2="46" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="brand-name">MythosBank</div>
+        <div class="brand-sub">Forensic Integrity Console</div>
+      </div>
+    </div>
+    <div class="status-pill" id="health-pill">
+      <span class="dot"></span> <span id="health-text">connecting…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: Submission panel -->
+    <section class="panel panel-submit">
+      <header class="panel-head">
+        <h1>New analysis</h1>
+        <p>Upload documents, images, videos, or signatures. The agent will
+           route each input through the right forensic toolchain and return
+           a court-grade evidence report.</p>
+      </header>
+
+      <div id="dropzone" class="dropzone" tabindex="0">
+        <svg class="dz-icon" viewBox="0 0 48 48" aria-hidden="true">
+          <path d="M24 6v26 M14 18l10-10 10 10" fill="none"
+                stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M8 38v4h32v-4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+        <div class="dz-title">Drop files or click to browse</div>
+        <div class="dz-sub">JPG · PNG · PDF · MP4 · MOV — up to 50 MB each</div>
+        <input type="file" id="file-input" multiple
+               accept="image/*,application/pdf,video/*"
+               hidden />
+      </div>
+
+      <ul id="file-list" class="file-list" aria-live="polite"></ul>
+
+      <label class="field">
+        <span>Context (optional)</span>
+        <textarea id="context" rows="3"
+                  placeholder="e.g. KYC submission for high-net-worth onboarding."></textarea>
+      </label>
+
+      <button id="submit-btn" class="primary" disabled>
+        <span class="label">Run forensic analysis</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+
+      <p class="legal">
+        Reports are screening only. They surface candidates for an expert
+        reviewer; they do not by themselves constitute admissible evidence.
+      </p>
+    </section>
+
+    <!-- RIGHT: Results panel -->
+    <section class="panel panel-results" id="results-panel">
+      <div class="placeholder" id="placeholder">
+        <div class="ph-shield">
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M32 4 L56 14 V32 C56 46 44 56 32 60 C20 56 8 46 8 32 V14 Z"
+                  fill="none" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </div>
+        <h2>Awaiting submission</h2>
+        <p>Your forensic report will materialise here.</p>
+      </div>
+
+      <article id="report" class="report" hidden>
+        <header class="verdict">
+          <div class="verdict-text">
+            <div class="verdict-label">Verdict</div>
+            <div class="verdict-value" id="v-verdict">—</div>
+            <div class="verdict-summary" id="v-summary"></div>
+          </div>
+          <div class="verdict-score" id="v-score-ring">
+            <svg viewBox="0 0 120 120">
+              <circle class="ring-bg" cx="60" cy="60" r="52" />
+              <circle class="ring-fg" cx="60" cy="60" r="52" id="v-score-ring-fg" />
+            </svg>
+            <div class="verdict-score-text">
+              <span class="big" id="v-score">0.000</span>
+              <span class="risk-pill" id="v-risk">—</span>
+            </div>
+          </div>
+        </header>
+
+        <section class="report-section">
+          <h3>Inputs &amp; per-detector evidence</h3>
+          <div class="cards" id="v-cards"></div>
+        </section>
+
+        <section class="report-section">
+          <h3>Recommendations</h3>
+          <ul class="bullet-list" id="v-recs"></ul>
+        </section>
+
+        <section class="report-section meta">
+          <h3>Provenance</h3>
+          <dl id="v-provenance" class="provenance"></dl>
+          <details class="raw">
+            <summary>Raw report JSON</summary>
+            <pre id="v-raw"></pre>
+          </details>
+          <button id="download-btn" class="ghost">Download report (.json)</button>
+        </section>
+      </article>
+
+      <div id="error" class="error-card" hidden></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>fraud-detection v0.2 · synthetic-calibrated baseline</span>
+    <span class="dot-sep">·</span>
+    <span>Drop-in module for MythosBanking</span>
+  </footer>
+
+  <template id="tpl-file-row">
+    <li class="file-row">
+      <div class="file-meta">
+        <div class="file-name"></div>
+        <div class="file-detail"></div>
+      </div>
+      <div class="file-controls">
+        <select class="kind-select">
+          <option value="auto">auto-detect</option>
+          <option value="image">image</option>
+          <option value="document">document</option>
+          <option value="video">video</option>
+          <option value="signature">signature</option>
+        </select>
+        <select class="ref-select" hidden>
+          <option value="">no reference</option>
+        </select>
+        <button class="remove" title="Remove">&times;</button>
+      </div>
+    </li>
+  </template>
+
+  <template id="tpl-input-card">
+    <article class="card">
+      <header class="card-head">
+        <div class="card-title"></div>
+        <span class="card-badge"></span>
+      </header>
+      <div class="card-meta"></div>
+      <div class="card-bars"></div>
+    </article>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
