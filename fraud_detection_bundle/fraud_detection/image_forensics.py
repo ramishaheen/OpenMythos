@@ -1,83 +1,99 @@
-"""Image-forensics primitives — ELA, EXIF, copy-move, noise.
+"""Image forensics — multi-detector fusion with calibrated weights.
 
-The techniques here mirror the open-source IFAKE pipeline:
-  - Error Level Analysis (ELA): re-encode at fixed quality and diff
-  - EXIF / metadata sanity checks
-  - Block-based copy-move detection (DCT-feature hashing)
-  - High-frequency noise residue scoring
+Replaces the v1 ELA-only + crude-copy-move pipeline. Now runs the
+peer-reviewed detector suite in ``fraud_detection.detectors`` and fuses
+their scores with weights calibrated against a synthetic clean/tampered
+split (see ``fraud_detection.calibration``).
 
-All routines run with Pillow + NumPy only — no GPU, no model weights.
-The agent treats these scores as evidence and lets Claude weigh them.
+Each fused report exposes:
+  * per-detector score, confidence, evidence (for chain-of-evidence)
+  * EXIF and metadata flags
+  * an aggregated forgery score with risk band
+  * an algorithm-version manifest for reproducibility
 """
 
 from __future__ import annotations
 
-import io
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-from PIL import ExifTags, Image, ImageChops
+from PIL import ExifTags, Image
 
+from fraud_detection.detectors import (
+    BenfordDCTDetector,
+    CFAInconsistencyDetector,
+    Detector,
+    DetectorResult,
+    ErrorLevelAnalysisDetector,
+    JPEGQuantizationDetector,
+    LightingConsistencyDetector,
+    NoiseResidueDetector,
+    PerceptualCopyMoveDetector,
+)
+from fraud_detection.detectors.base import safe_run
 from fraud_detection.utils import clamp01, risk_label
+
+# Calibrated fusion weights — see fraud_detection.calibration. Blended from a
+# 60% literature prior + 40% synthetic-data AUC. Re-calibrate against real
+# labelled data for production deployments and persist the resulting JSON
+# alongside the report (chain-of-custody requirement).
+DEFAULT_WEIGHTS: dict[str, float] = {
+    "ela": 0.4834,
+    "jpeg_qtable": 0.0960,
+    "benford_dct": 0.0600,
+    "cfa_inconsistency": 0.1326,
+    "copy_move_phash": 0.0960,
+    "prnu_consistency": 0.1020,
+    "lighting_consistency": 0.0300,
+}
+
+# Empirical risk thresholds learned on the synthetic split. Conservative.
+# A real deployment should re-run calibration and update these.
+DEFAULT_THRESHOLDS = {"high": 0.32, "medium": 0.22, "low": 0.17}
 
 
 @dataclass
 class ImageForensicsResult:
     path: str
-    ela_score: float
-    ela_hotspots: list[tuple[int, int, int, int]]
-    copy_move_score: float
-    copy_move_pairs: int
-    noise_score: float
+    detector_results: list[dict[str, Any]]
     metadata: dict[str, Any]
     metadata_flags: list[str]
+    fusion_weights: dict[str, float]
     overall_score: float
     risk: str
     notes: list[str] = field(default_factory=list)
+    algorithm_versions: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class ImageForensics:
-    """Stateless image-forensics analyzer."""
+    """Court-aware image-forensics pipeline. Stateless and deterministic."""
 
-    def __init__(self, ela_quality: int = 90, block_size: int = 16) -> None:
-        self.ela_quality = ela_quality
-        self.block_size = block_size
+    def __init__(
+        self,
+        detectors: list[Detector] | None = None,
+        weights: dict[str, float] | None = None,
+        thresholds: dict[str, float] | None = None,
+    ) -> None:
+        self.detectors: list[Detector] = detectors or [
+            ErrorLevelAnalysisDetector(),
+            JPEGQuantizationDetector(),
+            BenfordDCTDetector(),
+            CFAInconsistencyDetector(),
+            PerceptualCopyMoveDetector(),
+            NoiseResidueDetector(),
+            LightingConsistencyDetector(),
+        ]
+        self.weights = weights or DEFAULT_WEIGHTS
+        self.thresholds = thresholds or DEFAULT_THRESHOLDS
 
-    # ------------------------------------------------------------------ ELA
-    def error_level_analysis(
-        self, path: str | Path
-    ) -> tuple[float, list[tuple[int, int, int, int]], np.ndarray]:
-        """Compute ELA score, hotspot bounding boxes, and the ELA image."""
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=self.ela_quality)
-            buf.seek(0)
-            with Image.open(buf) as recompressed:
-                ela = ImageChops.difference(im, recompressed)
-            arr = np.asarray(ela, dtype=np.float32)
-
-        # Per-pixel max-channel residual, normalised to [0,1].
-        residual = arr.max(axis=2) / 255.0
-        score = float(residual.mean() * 8.0)  # IFAKE-style amplification
-        score = clamp01(score)
-
-        # Hotspots: connected high-residual blocks.
-        thresh = max(0.15, residual.mean() + 2.0 * residual.std())
-        mask = residual > thresh
-        hotspots = _bbox_clusters(mask, min_area=64, max_boxes=8)
-        return score, hotspots, residual
-
-    # ---------------------------------------------------------------- EXIF
+    # ------------------------------------------------------------ EXIF
     def metadata_inspection(
         self, path: str | Path
     ) -> tuple[dict[str, Any], list[str]]:
-        """Extract EXIF and flag suspicious patterns."""
         meta: dict[str, Any] = {}
         flags: list[str] = []
         try:
@@ -94,124 +110,56 @@ class ImageForensics:
             return meta, flags
 
         software = str(meta.get("Software", "")).lower()
-        for needle in ("photoshop", "gimp", "lightroom", "affinity", "snapseed"):
+        for needle in ("photoshop", "gimp", "lightroom", "affinity", "snapseed", "midjourney", "dall-e", "stable diffusion"):
             if needle in software:
                 flags.append(f"editor_signature:{needle}")
-                break
 
-        if not exif_has_camera(meta):
+        if not (meta.get("Make") and meta.get("Model")):
             flags.append("missing_camera_make_model")
 
         if "DateTime" in meta and "DateTimeOriginal" in meta:
             if meta["DateTime"] != meta["DateTimeOriginal"]:
                 flags.append("datetime_mismatch")
 
-        if meta.get("_format") == "JPEG" and "JPEGThumbnail" not in meta and not exif:
-            flags.append("jpeg_without_exif")
-
         return meta, flags
-
-    # --------------------------------------------------------- copy-move
-    def copy_move_detection(self, path: str | Path) -> tuple[float, int]:
-        """Block-DCT hashing — counts matching block pairs.
-
-        Not a state-of-the-art detector, but flags obvious clone-stamps.
-        """
-        from PIL import Image
-
-        with Image.open(path) as im:
-            im = im.convert("L")
-            w, h = im.size
-            scale = min(1.0, 512 / max(w, h))
-            if scale < 1.0:
-                im = im.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-            arr = np.asarray(im, dtype=np.float32)
-
-        b = self.block_size
-        H, W = arr.shape
-        if H < b * 2 or W < b * 2:
-            return 0.0, 0
-
-        # Coarse 8-bit DCT signature per overlapping block (stride b//2).
-        stride = max(1, b // 2)
-        sigs: dict[bytes, list[tuple[int, int]]] = {}
-        pairs = 0
-        for y in range(0, H - b, stride):
-            for x in range(0, W - b, stride):
-                block = arr[y : y + b, x : x + b]
-                sig = _block_signature(block)
-                bucket = sigs.setdefault(sig, [])
-                for py, px in bucket:
-                    if abs(py - y) + abs(px - x) > b * 2:  # ignore neighbours
-                        pairs += 1
-                bucket.append((y, x))
-
-        denom = max(1, ((H // stride) * (W // stride)) // 16)
-        score = clamp01(pairs / denom)
-        return score, pairs
-
-    # ----------------------------------------------------------- noise
-    def noise_residue_score(self, path: str | Path) -> float:
-        """High-pass residual variance — splices often disrupt sensor noise."""
-        with Image.open(path) as im:
-            arr = np.asarray(im.convert("L"), dtype=np.float32)
-        # 3x3 Laplacian
-        k = np.array([[0, -1, 0], [-1, 4, -1], [0, -1, 0]], dtype=np.float32)
-        from numpy.lib.stride_tricks import sliding_window_view
-
-        if arr.shape[0] < 3 or arr.shape[1] < 3:
-            return 0.0
-        windows = sliding_window_view(arr, (3, 3))
-        lap = (windows * k).sum(axis=(-1, -2))
-        # Block-wise variance heterogeneity: legit photos look homogeneous.
-        bs = 32
-        H, W = lap.shape
-        bh, bw = H // bs, W // bs
-        if bh < 2 or bw < 2:
-            return 0.0
-        cropped = lap[: bh * bs, : bw * bs].reshape(bh, bs, bw, bs)
-        block_var = cropped.var(axis=(1, 3))
-        # Coefficient of variation across blocks.
-        mean = float(block_var.mean()) + 1e-6
-        cov = float(block_var.std() / mean)
-        return clamp01((cov - 0.6) / 1.5)
 
     # ---------------------------------------------------------- compose
     def analyze(self, path: str | Path) -> ImageForensicsResult:
-        ela, hotspots, _ = self.error_level_analysis(path)
         meta, meta_flags = self.metadata_inspection(path)
-        cm_score, cm_pairs = self.copy_move_detection(path)
-        noise = self.noise_residue_score(path)
+        results: list[DetectorResult] = [safe_run(d, path) for d in self.detectors]
 
-        # Weighted blend — tuned conservatively. Claude can override in agent.
-        overall = clamp01(
-            0.45 * ela
-            + 0.25 * cm_score
-            + 0.20 * noise
-            + 0.10 * min(1.0, len(meta_flags) / 3.0)
-        )
-        notes = []
-        if ela > 0.4:
-            notes.append("Elevated ELA residuals suggest local re-encoding.")
-        if cm_score > 0.3:
-            notes.append(f"Detected {cm_pairs} matching block pairs (copy-move).")
-        if noise > 0.4:
-            notes.append("Block-wise noise heterogeneity is high.")
+        # Confidence-weighted fusion.
+        weighted_sum = 0.0
+        weight_total = 0.0
+        for r in results:
+            w = self.weights.get(r.name, 0.0) * r.confidence
+            if w <= 0:
+                continue
+            weighted_sum += w * r.score
+            weight_total += w
+        forensic_score = weighted_sum / weight_total if weight_total > 0 else 0.0
+
+        # Metadata penalty: capped at 0.15 so EXIF alone can't dominate.
+        meta_penalty = min(0.15, 0.05 * sum(1 for f in meta_flags if "editor_signature" in f) + 0.02 * len(meta_flags))
+        score = clamp01(0.85 * forensic_score + meta_penalty)
+
+        notes: list[str] = []
+        for r in results:
+            for n in r.notes:
+                notes.append(f"[{r.name}] {n}")
         for f in meta_flags:
-            notes.append(f"Metadata flag: {f}")
+            notes.append(f"[metadata] flag: {f}")
 
         return ImageForensicsResult(
             path=str(path),
-            ela_score=round(ela, 4),
-            ela_hotspots=hotspots,
-            copy_move_score=round(cm_score, 4),
-            copy_move_pairs=cm_pairs,
-            noise_score=round(noise, 4),
+            detector_results=[r.to_dict() for r in results],
             metadata=meta,
             metadata_flags=meta_flags,
-            overall_score=round(overall, 4),
-            risk=risk_label(overall),
+            fusion_weights=dict(self.weights),
+            overall_score=round(score, 4),
+            risk=_risk(score, self.thresholds),
             notes=notes,
+            algorithm_versions={r.name: r.version for r in results},
         )
 
 
@@ -231,57 +179,15 @@ def _coerce(v: Any) -> Any:
     return str(v)
 
 
-def exif_has_camera(meta: dict[str, Any]) -> bool:
-    return bool(meta.get("Make")) and bool(meta.get("Model"))
+def _risk(score: float, thresholds: dict[str, float]) -> str:
+    if score >= thresholds.get("high", 0.62):
+        return "high"
+    if score >= thresholds.get("medium", 0.40):
+        return "medium"
+    if score >= thresholds.get("low", 0.18):
+        return "low"
+    return "minimal"
 
 
-def _block_signature(block: np.ndarray) -> bytes:
-    """8-bit quantised DCT-ish signature — robust to mild JPEG noise."""
-    b = block - block.mean()
-    # Cheap separable transform: row + column means of sign pattern.
-    rows = (b.mean(axis=1) > 0).astype(np.uint8)
-    cols = (b.mean(axis=0) > 0).astype(np.uint8)
-    return rows.tobytes() + cols.tobytes()
-
-
-def _bbox_clusters(
-    mask: np.ndarray, min_area: int, max_boxes: int
-) -> list[tuple[int, int, int, int]]:
-    """Coarse connected-region extractor (no scipy dependency)."""
-    if not mask.any():
-        return []
-    h, w = mask.shape
-    visited = np.zeros_like(mask, dtype=bool)
-    boxes: list[tuple[int, int, int, int]] = []
-    # 8-connected flood-fill via iterative DFS.
-    for y in range(h):
-        for x in range(w):
-            if not mask[y, x] or visited[y, x]:
-                continue
-            stack = [(y, x)]
-            ys, xs = [], []
-            while stack:
-                cy, cx = stack.pop()
-                if cy < 0 or cy >= h or cx < 0 or cx >= w:
-                    continue
-                if visited[cy, cx] or not mask[cy, cx]:
-                    continue
-                visited[cy, cx] = True
-                ys.append(cy)
-                xs.append(cx)
-                stack.extend(
-                    [
-                        (cy - 1, cx),
-                        (cy + 1, cx),
-                        (cy, cx - 1),
-                        (cy, cx + 1),
-                        (cy - 1, cx - 1),
-                        (cy - 1, cx + 1),
-                        (cy + 1, cx - 1),
-                        (cy + 1, cx + 1),
-                    ]
-                )
-            if len(ys) >= min_area:
-                boxes.append((min(xs), min(ys), max(xs), max(ys)))
-    boxes.sort(key=lambda b: -((b[2] - b[0]) * (b[3] - b[1])))
-    return boxes[:max_boxes]
+# Back-compat shim: export the old risk_label name from utils.
+__all__ = ["ImageForensics", "ImageForensicsResult", "DEFAULT_WEIGHTS", "DEFAULT_THRESHOLDS", "risk_label"]

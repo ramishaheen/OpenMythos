@@ -80,11 +80,17 @@ def clamp01(x: float) -> float:
 
 
 def risk_label(score: float) -> str:
-    """Map a 0-1 fraud score to a human-readable risk band."""
-    if score >= 0.75:
+    """Map a 0-1 fraud score to a human-readable risk band.
+
+    Bands are aligned with the calibrated thresholds in
+    ``fraud_detection.image_forensics.DEFAULT_THRESHOLDS``. They are
+    deliberately conservative on the synthetic baseline; production
+    deployments should re-calibrate against labelled data.
+    """
+    if score >= 0.32:
         return "high"
-    if score >= 0.45:
+    if score >= 0.22:
         return "medium"
-    if score >= 0.20:
+    if score >= 0.17:
         return "low"
     return "minimal"

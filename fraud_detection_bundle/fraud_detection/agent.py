@@ -24,9 +24,11 @@ deterministic local-only scoring so the pipeline still runs in offline tests.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -179,6 +181,11 @@ class FraudReport:
     tool_trace: list[dict[str, Any]] = field(default_factory=list)
     inputs: list[dict[str, Any]] = field(default_factory=list)
     model: str | None = None
+    chain_of_evidence: list[dict[str, Any]] = field(default_factory=list)
+    algorithm_versions: dict[str, str] = field(default_factory=dict)
+    detector_results: list[dict[str, Any]] = field(default_factory=list)
+    reproducibility_hash: str | None = None
+    generated_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -381,6 +388,8 @@ class FraudDetectionAgent:
             )
 
         score = float(final.get("score", 0.0))
+        chain, versions, det_results = self._build_provenance(inputs, tool_trace)
+        repro = self._reproducibility_hash(inputs, versions)
         return FraudReport(
             verdict=final.get("verdict", "inconclusive"),
             score=round(score, 4),
@@ -391,7 +400,115 @@ class FraudDetectionAgent:
             tool_trace=tool_trace,
             inputs=[asdict(i) for i in inputs],
             model=self.model,
+            chain_of_evidence=chain,
+            algorithm_versions=versions,
+            detector_results=det_results,
+            reproducibility_hash=repro,
+            generated_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    # ----------------------------- forensic provenance helpers
+    def _build_provenance(
+        self,
+        inputs: list[FraudInput],
+        tool_trace: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
+        """Assemble chain-of-evidence + algorithm versions from the inputs.
+
+        We re-derive provenance by reading file metadata (sha256, size, mime).
+        Algorithm versions come from the analyzer modules; detector_results
+        is populated from a single local re-run so the report always
+        contains the structured per-detector evidence even if Claude only
+        returned a free-text summary.
+        """
+        chain: list[dict[str, Any]] = []
+        det_results: list[dict[str, Any]] = []
+        versions: dict[str, str] = {}
+        for inp in inputs:
+            try:
+                meta = file_meta(inp.path)
+            except Exception as e:  # noqa: BLE001
+                chain.append(
+                    {"input": inp.path, "error": f"file_meta failed: {e}"}
+                )
+                continue
+            kind = inp.resolved_kind()
+            entry: dict[str, Any] = {
+                "input": inp.path,
+                "kind": kind,
+                "label": inp.label,
+                "size_bytes": meta.size_bytes,
+                "mime": meta.mime,
+                "sha256": meta.sha256,
+            }
+            if inp.reference_path:
+                try:
+                    rmeta = file_meta(inp.reference_path)
+                    entry["reference_sha256"] = rmeta.sha256
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                if kind == "image":
+                    r = self.image_forensics.analyze(inp.path)
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["detectors"] = r.detector_results
+                    versions.update(r.algorithm_versions)
+                    det_results.append(
+                        {"input": inp.path, "kind": kind, "results": r.detector_results}
+                    )
+                elif kind == "document":
+                    r = self.document_analyzer.analyze(inp.path)
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["page_count"] = r.page_count
+                    entry["text_anomalies"] = r.text_anomalies
+                    if r.page_forensics:
+                        for pr in r.page_forensics:
+                            versions.update(pr.algorithm_versions)
+                elif kind == "video":
+                    r = self.video_analyzer.analyze(inp.path)
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["temporal_score"] = r.temporal_score
+                    entry["motion_anomaly_score"] = r.motion_anomaly_score
+                    entry["duplicate_frames"] = r.duplicate_frames
+                    versions.update(r.algorithm_versions)
+                elif kind == "signature":
+                    if inp.reference_path:
+                        r = self.signature_verifier.compare(inp.path, inp.reference_path)
+                    else:
+                        r = self.signature_verifier.analyze_single(inp.path)
+                    entry["forgery_score"] = r.forgery_score
+                    entry["risk"] = r.risk
+                    versions.update(r.algorithm_versions)
+            except Exception as e:  # noqa: BLE001
+                entry["error"] = f"{type(e).__name__}: {e}"
+            chain.append(entry)
+        return chain, versions, det_results
+
+    def _reproducibility_hash(
+        self, inputs: list[FraudInput], versions: dict[str, str]
+    ) -> str:
+        h = hashlib.sha256()
+        h.update(b"fraud_detection_v0.2\n")
+        for inp in inputs:
+            try:
+                meta = file_meta(inp.path)
+                h.update(f"{inp.path}|{meta.sha256}|{meta.size_bytes}\n".encode())
+            except Exception:  # noqa: BLE001
+                h.update(f"{inp.path}|missing\n".encode())
+            if inp.reference_path:
+                try:
+                    rmeta = file_meta(inp.reference_path)
+                    h.update(
+                        f"REF|{inp.reference_path}|{rmeta.sha256}\n".encode()
+                    )
+                except Exception:  # noqa: BLE001
+                    h.update(f"REF|{inp.reference_path}|missing\n".encode())
+        for k in sorted(versions):
+            h.update(f"{k}={versions[k]}\n".encode())
+        return h.hexdigest()
 
     # ------------------------------------------- offline fallback path
     def _offline_report(
@@ -404,13 +521,29 @@ class FraudDetectionAgent:
         evidence: list[dict[str, Any]] = []
         scores: list[float] = []
         trace = list(tool_trace or [])
+        det_results: list[dict[str, Any]] = []
+        versions: dict[str, str] = {}
+        chain: list[dict[str, Any]] = []
 
         for inp in inputs:
             kind = inp.resolved_kind()
+            entry: dict[str, Any] = {"input": inp.path, "kind": kind, "label": inp.label}
+            try:
+                meta = file_meta(inp.path)
+                entry.update({"sha256": meta.sha256, "size_bytes": meta.size_bytes, "mime": meta.mime})
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 if kind == "image":
                     r = self.image_forensics.analyze(inp.path)
                     scores.append(r.overall_score)
+                    versions.update(r.algorithm_versions)
+                    det_results.append(
+                        {"input": inp.path, "kind": kind, "results": r.detector_results}
+                    )
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["detectors"] = r.detector_results
                     evidence.append(
                         {
                             "source": "image_forensics",
@@ -422,6 +555,12 @@ class FraudDetectionAgent:
                 elif kind == "document":
                     r = self.document_analyzer.analyze(inp.path)
                     scores.append(r.overall_score)
+                    for pr in r.page_forensics:
+                        versions.update(pr.algorithm_versions)
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["page_count"] = r.page_count
+                    entry["text_anomalies"] = r.text_anomalies
                     evidence.append(
                         {
                             "source": "document_analyzer",
@@ -433,6 +572,12 @@ class FraudDetectionAgent:
                 elif kind == "video":
                     r = self.video_analyzer.analyze(inp.path)
                     scores.append(r.overall_score)
+                    versions.update(r.algorithm_versions)
+                    entry["overall_score"] = r.overall_score
+                    entry["risk"] = r.risk
+                    entry["temporal_score"] = r.temporal_score
+                    entry["motion_anomaly_score"] = r.motion_anomaly_score
+                    entry["duplicate_frames"] = r.duplicate_frames
                     evidence.append(
                         {
                             "source": "video_analyzer",
@@ -447,6 +592,9 @@ class FraudDetectionAgent:
                     else:
                         r = self.signature_verifier.analyze_single(inp.path)
                     scores.append(r.forgery_score)
+                    versions.update(r.algorithm_versions)
+                    entry["forgery_score"] = r.forgery_score
+                    entry["risk"] = r.risk
                     evidence.append(
                         {
                             "source": "signature_verifier",
@@ -464,6 +612,7 @@ class FraudDetectionAgent:
                         }
                     )
             except Exception as e:  # noqa: BLE001
+                entry["error"] = f"{type(e).__name__}: {e}"
                 evidence.append(
                     {
                         "source": "error",
@@ -472,12 +621,15 @@ class FraudDetectionAgent:
                     }
                 )
                 trace.append({"tool": "dispatch", "args": {"path": inp.path}, "ok": False, "error": str(e)})
+            chain.append(entry)
 
+        # Use the calibrated thresholds from image_forensics for verdict mapping.
+        from fraud_detection.image_forensics import DEFAULT_THRESHOLDS
         agg = max(scores, default=0.0)
         verdict: Literal["authentic", "suspicious", "manipulated", "inconclusive"]
-        if agg >= 0.75:
+        if agg >= DEFAULT_THRESHOLDS["high"]:
             verdict = "manipulated"
-        elif agg >= 0.45:
+        elif agg >= DEFAULT_THRESHOLDS["medium"]:
             verdict = "suspicious"
         elif agg > 0.0:
             verdict = "authentic"
@@ -488,7 +640,7 @@ class FraudDetectionAgent:
             "Re-run analysis with the Anthropic SDK installed and ANTHROPIC_API_KEY set "
             "to enable Claude's vision-based corroboration.",
         ]
-        if agg >= 0.45:
+        if agg >= 0.40:
             recs.append("Escalate to a human reviewer with the listed evidence.")
         if extra_note:
             recs.append(extra_note)
@@ -500,6 +652,8 @@ class FraudDetectionAgent:
             f"Aggregate risk score {round(agg, 4)} ({risk_label(agg)})."
         )
 
+        repro = self._reproducibility_hash(inputs, versions)
+
         return FraudReport(
             verdict=verdict,
             score=round(agg, 4),
@@ -510,4 +664,9 @@ class FraudDetectionAgent:
             tool_trace=trace,
             inputs=[asdict(i) for i in inputs],
             model=None,
+            chain_of_evidence=chain,
+            algorithm_versions=versions,
+            detector_results=det_results,
+            reproducibility_hash=repro,
+            generated_at=datetime.now(timezone.utc).isoformat(),
         )

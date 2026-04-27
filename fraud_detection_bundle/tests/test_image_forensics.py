@@ -62,10 +62,12 @@ def test_detect_kind() -> None:
 
 
 def test_risk_labels() -> None:
+    """Bands match the calibrated thresholds in image_forensics.DEFAULT_THRESHOLDS."""
     assert risk_label(0.0) == "minimal"
-    assert risk_label(0.3) == "low"
-    assert risk_label(0.5) == "medium"
-    assert risk_label(0.8) == "high"
+    assert risk_label(0.10) == "minimal"
+    assert risk_label(0.18) == "low"
+    assert risk_label(0.25) == "medium"
+    assert risk_label(0.40) == "high"
 
 
 def test_signature_intrinsic(tmp_path: Path) -> None:

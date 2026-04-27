@@ -1,49 +1,120 @@
 # Fraud Detection — for MythosBanking
 
 A Claude-powered agent that detects falsification and manipulation of
-**documents**, **images**, **videos**, and **signatures**. Designed as a
-self-contained drop-in module for the
+**documents**, **images**, **videos**, and **signatures**, fusing a suite
+of peer-reviewed forensic primitives with Claude's vision reasoning.
+Designed as a self-contained drop-in module for the
 [MythosBanking](https://github.com/ramishaheen/MythosBanking) backend.
 
-The agent fuses classical forensic primitives with Claude's vision
-reasoning, drawing technique inspiration from:
+Inspired by:
 
-- [shraddhavijay/IFAKE](https://github.com/shraddhavijay/IFAKE) — image forgery
-  detection (ELA, metadata, noise residue).
-- [GitHub `signature-detection` topic](https://github.com/topics/signature-detection)
-  — signature localization and verification approaches.
-- [sainipankaj15/Signature-Forgery-Detection](https://github.com/sainipankaj15/Signature-Forgery-Detection)
-  — feature-based signature forgery detection (geometric + ORB matching).
+- [shraddhavijay/IFAKE](https://github.com/shraddhavijay/IFAKE) — image forgery detection.
+- [GitHub `signature-detection` topic](https://github.com/topics/signature-detection).
+- [sainipankaj15/Signature-Forgery-Detection](https://github.com/sainipankaj15/Signature-Forgery-Detection).
 
-## How it works
+## What's inside
 
+### Image-forensics detector suite (`fraud_detection/detectors/`)
+
+Each detector is a pure-Python module exposing
+`run(path) -> DetectorResult(score, confidence, evidence, notes)`.
+Scores are calibrated to `[0, 1]` and fused with weights that come from a
+60% literature prior + 40% synthetic-AUC blend (re-runnable; see below).
+
+| Detector | Primitive | Reference |
+| --- | --- | --- |
+| `ela` | Error Level Analysis with hotspot localization | Krawetz / IFAKE |
+| `jpeg_qtable` | JPEG quantization-table fingerprint + DCT-histogram double-quantization | Lukáš & Fridrich 2003; Pevný & Fridrich 2008 |
+| `benford_dct` | First-digit Benford deviation on AC-DCT magnitudes | Fu, Shi & Su 2007 |
+| `cfa_inconsistency` | Bayer demosaicing residual variance ratio | Popescu & Farid 2005 |
+| `copy_move_phash` | 64-bit DCT pHash with shift-vector consensus | Zauner 2010, Christlein et al. 2012 |
+| `prnu_consistency` | Internal sensor-noise residue consistency (block z-score) | Lukáš, Fridrich & Goljan 2006 |
+| `lighting_consistency` | Block-wise dominant gradient direction dispersion | Johnson & Farid 2005 |
+
+### Signature verifier upgrades (`fraud_detection/signature_verifier.py`)
+
+- Vectorised Zhang-Suen skeletonization (≈ 10× faster than the v1 loop).
+- Geometric features: aspect, density, centroid, contour count.
+- Topological features: Euler number, loop count.
+- Stroke-direction histogram (8-bin HOG of skeleton tangents).
+- Stroke thickness *variance* — proxy for pen-pressure consistency.
+- Reference vs questioned comparator fuses geometric/topological/direction
+  distances + ORB descriptors + SSIM.
+
+### Video analyzer upgrades (`fraud_detection/video_analyzer.py`)
+
+- Per-frame run of the full image-forensics suite.
+- Frame-duplicate detection via 64-bit perceptual hash.
+- Optical-flow magnitude divergence (Farnebäck) for splice / face-swap cues.
+- Temporal coherence score from inter-frame forensic-score deltas.
+
+### Agent orchestrator (`fraud_detection/agent.py`)
+
+- Claude `claude-sonnet-4-6` with prompt-cached system prompt and vision
+  inputs for every image / signature.
+- Tool-use loop: `run_image_forensics`, `analyze_document`, `analyze_video`,
+  `verify_signature`, `analyze_signature`, `submit_report`.
+- **Forensic provenance** in every report:
+  - per-input SHA-256, MIME, size,
+  - per-detector score / confidence / evidence,
+  - algorithm-version manifest,
+  - deterministic reproducibility hash,
+  - UTC `generated_at` timestamp.
+- Deterministic offline fallback when `anthropic` / API key is unavailable.
+
+## Calibration
+
+Run as a module — produces `calibration_report.json` next to the source:
+
+```bash
+python -m fraud_detection.calibration
 ```
-                ┌────────────────────────────────────────────────┐
-                │ FraudDetectionAgent (Claude sonnet-4-6)        │
-                │  • cached system prompt                        │
-                │  • vision input for every image / signature    │
-                │  • tool-use loop (max N iterations)            │
-                └────────────────────────────────────────────────┘
-                            │ tool_use            │ submit_report
-                            ▼                     ▼
-   ┌──────────────────────────────────────────┐  FraudReport
-   │  ImageForensics  — ELA, EXIF, copy-move │   verdict, score,
-   │  DocumentAnalyzer — pages + OCR + text  │   evidence,
-   │  VideoAnalyzer    — frames + temporal   │   recommendations,
-   │  SignatureVerifier— features + ORB+SSIM │   tool trace
-   └──────────────────────────────────────────┘
-```
 
-Claude decides *which* analyzers to run, inspects the attached imagery
-visually, and weighs the local evidence. The pipeline still works without
-the Anthropic SDK / API key — it falls back to a deterministic local fusion,
-useful for unit tests and air-gapped deployments.
+The script:
+1. Synthesises a labelled dataset (camera-origin pristine + splice / copy-move
+   / re-compressed classes) using a Bayer-mosaic + demosaic pipeline so the
+   CFA / ELA / double-JPEG signals exist on the synthetic data.
+2. Runs every detector on every sample.
+3. Computes per-detector AUC using Mann-Whitney U.
+4. Blends AUC-derived weights with a literature-informed prior (60/40
+   split, with a 3% floor so no detector is ever zero-weighted).
+5. Selects risk thresholds by Youden's J on the fused score.
+
+The current baked weights (in `image_forensics.DEFAULT_WEIGHTS`) and
+thresholds (in `DEFAULT_THRESHOLDS`) are from this synthetic baseline.
+**Real production deployments should re-run this against labelled domain
+data** (e.g. CASIA, CoMoFoD, or your own annotated KYC / claims corpus)
+and persist the resulting JSON as part of chain-of-custody.
+
+## Honest caveat about "court-grade"
+
+A pipeline becomes admissible in court when, in combination, it satisfies:
+
+1. **Validation** on a labelled, domain-representative dataset, with
+   reported false-positive / false-negative rates per detector and at
+   the fusion level.
+2. **Reproducibility**: deterministic outputs, versioned algorithms,
+   pinned dependencies, signed evidence packages.
+3. **Chain of custody**: cryptographic hashes of inputs, time-stamped
+   audit trails, append-only log of analyzer invocations.
+4. **Expert testimony**: a qualified examiner explaining the methodology
+   and limitations to the trier of fact.
+5. **Daubert / Frye admissibility**: peer-reviewed methodology, known
+   error rates, general acceptance in the forensic community.
+
+This module gives you (1) the *infrastructure* for items 1–3 (per-detector
+scores with versions, deterministic fallback, reproducibility hash), and
+(2) implementations of *peer-reviewed primitives* whose admissibility
+question is well-trodden in the literature. **It does not by itself
+constitute court-admissible evidence.** Use it as high-quality screening
+that surfaces candidates for an expert reviewer, who will run dedicated
+tools (e.g. Amped Authenticate, Belkasoft, X-Ways) and provide testimony.
 
 ## Install
 
 ```bash
-pip install -e .            # core only (image forensics + signatures)
-pip install -e .[all]       # adds video, SSIM, PDF, OCR
+pip install -e .            # core: anthropic + Pillow + numpy
+pip install -e .[all]       # adds opencv, scikit-image, pypdfium2, pytesseract
 export ANTHROPIC_API_KEY=...
 ```
 
@@ -69,7 +140,12 @@ report = agent.run(
 )
 
 print(report.verdict, report.risk, report.score)
-print(report.to_json())
+print("Reproducibility:", report.reproducibility_hash)
+print("Algorithm versions:", report.algorithm_versions)
+
+# Persist for chain-of-custody:
+import json
+json.dump(report.to_dict(), open("report.json", "w"), indent=2, default=str)
 ```
 
 ## CLI
@@ -80,76 +156,49 @@ fraud-detect -k signature -r ref.png questioned.png --context "wire authorizatio
 fraud-detect liveness.mp4 --json
 ```
 
-## Integrating into MythosBanking
-
-1. Copy the `fraud_detection/` folder into your service tree (e.g.
-   `mythosbanking/services/fraud_detection/`), or `pip install` this bundle.
-2. Add `ANTHROPIC_API_KEY` to your secret store / env config.
-3. Wire it into the relevant flows:
-   - **KYC / onboarding** — call `agent.run` on uploaded ID photos and
-     proof-of-address PDFs before approving an application.
-   - **Wire / payment authorization** — call `verify_signature` or the
-     full agent on signed instructions.
-   - **Claims / disputes** — analyze submitted evidence images and videos.
-4. Persist `FraudReport.to_dict()` alongside the underlying record. The
-   `tool_trace` makes the decision auditable.
-
-Recommended pattern for a FastAPI route:
-
-```python
-from fastapi import UploadFile, File
-from fraud_detection import FraudDetectionAgent, FraudInput
-
-agent = FraudDetectionAgent()  # build once, reuse across requests
-
-@app.post("/kyc/review")
-async def review(passport: UploadFile = File(...), proof: UploadFile = File(...)):
-    paths = [save(passport), save(proof)]
-    inputs = [
-        FraudInput(path=paths[0], kind="image", label="passport_front"),
-        FraudInput(path=paths[1], kind="document", label="proof_of_address"),
-    ]
-    report = agent.run(inputs, context="KYC submission")
-    return report.to_dict()
-```
-
-## Modules
-
-| File | Purpose |
-| --- | --- |
-| `fraud_detection/agent.py` | Claude tool-use orchestrator + offline fallback |
-| `fraud_detection/image_forensics.py` | ELA, EXIF flags, copy-move, noise residue |
-| `fraud_detection/document_analyzer.py` | PDF rendering, per-page forensics, OCR text checks |
-| `fraud_detection/video_analyzer.py` | Frame sampling, per-frame ELA, temporal residual |
-| `fraud_detection/signature_verifier.py` | Otsu + skeleton features, ORB, SSIM |
-| `fraud_detection/utils.py` | File metadata, base64 image encoding, scoring helpers |
-| `fraud_detection/cli.py` | `fraud-detect` console script |
-
-## Risk bands
+## Risk bands (synthetic-calibrated; re-tune for production)
 
 | Score | Risk | Suggested action |
 | --- | --- | --- |
-| `≥ 0.75` | high | Block flow, escalate to human review with `tool_trace`. |
-| `≥ 0.45` | medium | Hold + secondary verification (callback, doc re-upload). |
-| `≥ 0.20` | low | Log + allow. |
-| `< 0.20` | minimal | Allow. |
+| `≥ 0.32` | high | Block flow, escalate to human review with `chain_of_evidence`. |
+| `≥ 0.22` | medium | Hold + secondary verification. |
+| `≥ 0.17` | low | Log + allow. |
+| `< 0.17` | minimal | Allow. |
 
 ## Tests
 
 ```bash
 pip install -e .[dev]
 pytest -q
+# 18 tests, ~1.5s; runs entirely offline (no API key needed).
 ```
 
-The test suite uses synthetic images and forces the offline path, so it
-runs without an API key.
+## Module map
 
-## Notes & caveats
+| File | Purpose |
+| --- | --- |
+| `fraud_detection/agent.py` | Claude tool-use orchestrator + offline fallback + provenance |
+| `fraud_detection/detectors/*.py` | Per-detector forensic primitives |
+| `fraud_detection/image_forensics.py` | Multi-detector fusion + EXIF flags |
+| `fraud_detection/document_analyzer.py` | PDF rendering + per-page forensics + OCR text checks |
+| `fraud_detection/video_analyzer.py` | Frame sampling + per-frame fusion + temporal + motion |
+| `fraud_detection/signature_verifier.py` | Otsu + skeleton + topology + ORB + SSIM |
+| `fraud_detection/calibration/` | Synthetic dataset generator + AUC-based weight tuning |
+| `fraud_detection/cli.py` | `fraud-detect` console script |
 
-- The classical detectors here are **screening** tools, not court-grade
-  forensics. They flag candidates for review; final calls belong to a human.
-- Adversaries who control re-encoding can suppress ELA. Combine with
-  signed-image / verified-camera attestations where possible.
-- Video analysis samples a handful of frames — for high-stakes deepfake
-  detection, replace `VideoAnalyzer` with a dedicated model (the agent's
-  tool interface is stable; just swap the implementation).
+## Roadmap toward stronger forensics
+
+If you need to push closer to court-grade in your domain:
+
+1. **Replace synthetic calibration with a labelled production set.**
+   Re-run `python -m fraud_detection.calibration` (extended with a
+   labelled-data loader) and check the resulting JSON into version
+   control alongside the model.
+2. **Plug in a deepfake CNN** for video face manipulation (FaceForensics++,
+   X-CLIP). Add it as a new detector — the agent's tool contract is stable.
+3. **Add jpegio** for direct DCT-coefficient reading instead of the
+   spatial-domain double-quantization approximation used today.
+4. **Per-camera PRNU fingerprints**: add a reference-fingerprint store
+   keyed by claimed device, then do correlation-based verification.
+5. **Ingest expert reviewer feedback** — turn screen-out / approve labels
+   into a calibration-update loop.

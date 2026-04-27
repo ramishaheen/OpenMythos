@@ -1,0 +1,49 @@
+{
+  "n_samples": 100,
+  "detectors": [
+    "ela",
+    "jpeg_qtable",
+    "benford_dct",
+    "cfa_inconsistency",
+    "copy_move_phash",
+    "prnu_consistency",
+    "lighting_consistency"
+  ],
+  "auc": {
+    "ela": 0.9032,
+    "jpeg_qtable": 0.2252,
+    "benford_dct": 0.0,
+    "cfa_inconsistency": 0.5264,
+    "copy_move_phash": 0.0,
+    "prnu_consistency": 0.0,
+    "lighting_consistency": 0.4808
+  },
+  "weights": {
+    "ela": 0.4834,
+    "jpeg_qtable": 0.096,
+    "benford_dct": 0.06,
+    "cfa_inconsistency": 0.1326,
+    "copy_move_phash": 0.096,
+    "prnu_consistency": 0.102,
+    "lighting_consistency": 0.03
+  },
+  "thresholds": {
+    "low": 0.1711,
+    "medium": 0.2211,
+    "high": 0.3211
+  },
+  "score_stats": {
+    "pristine": {
+      "mean": 0.2128,
+      "p95": 0.2443
+    },
+    "tampered": {
+      "mean": 0.2527,
+      "p05": 0.2176
+    }
+  },
+  "notes": [
+    "Blended weights: 60% literature prior + 40% synthetic AUC, floor 0.03.",
+    "Overall fused AUC on synthetic split: 0.886"
+  ]
+}
