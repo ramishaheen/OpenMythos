@@ -112,6 +112,18 @@ tools (e.g. Amped Authenticate, Belkasoft, X-Ways) and provide testimony.
 
 ## Install
 
+**Fastest — one-command launcher** (creates a venv, installs deps, opens
+the browser):
+
+```bash
+./run_local.sh        # macOS / Linux / WSL
+./run_local.ps1       # Windows PowerShell
+```
+
+See [QUICKSTART.md](QUICKSTART.md) for the full local recipe.
+
+**Manual:**
+
 ```bash
 pip install -e .            # core: anthropic + Pillow + numpy
 pip install -e .[all]       # adds opencv, scikit-image, pypdfium2, pytesseract
