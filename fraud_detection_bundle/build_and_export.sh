@@ -96,9 +96,16 @@ if [ -d "dist/MythosBankFraudDetection.app" ]; then
   rm -rf "$DESKTOP/MythosBankFraudDetection.app"
   cp -R "dist/MythosBankFraudDetection.app" "$DESKTOP/"
   TARGET="$DESKTOP/MythosBankFraudDetection.app"
+  # Strip macOS quarantine attribute so Gatekeeper doesn't refuse
+  # the unsigned .app the first time the user double-clicks.
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
+  fi
   green "  Exported: $TARGET"
   echo
   bold  "  Double-click MythosBankFraudDetection.app on your Desktop to launch."
+  yellow "  (macOS only) If Gatekeeper blocks it, right-click the .app and pick"
+  echo   "  'Open' instead of double-clicking the first time."
 elif [ -f "dist/MythosBankFraudDetection" ]; then
   # Linux ELF binary.
   cp "dist/MythosBankFraudDetection" "$DESKTOP/MythosBankFraudDetection"
